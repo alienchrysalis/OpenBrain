@@ -101,7 +101,7 @@ search_thought() {
         -H "Content-Type: application/json" \
         -d "{\"query\":\"smoke test verification marker $MARKER\",\"limit\":5}") || return 1
     if [[ $HAS_JQ -eq 1 ]]; then
-        matches=$(echo "$body" | jq -r --arg id "$THOUGHT_ID" '.[] | select(.id == $id) | .id')
+        matches=$(echo "$body" | jq -r --arg marker "$MARKER" '.results[]?.content | select(contains($marker))')
     else
         matches=$(echo "$body" | grep -oE "\"id\":\"$THOUGHT_ID\"")
     fi
