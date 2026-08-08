@@ -12,7 +12,7 @@
  *   OPENBRAIN_API_URL=https://openbrain.example.com npm run test:integration
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, afterAll } from "vitest";
 
 const API_URL = process.env.OPENBRAIN_API_URL ?? "http://localhost:8000";
 
