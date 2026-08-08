@@ -160,6 +160,37 @@ kubectl get secret acr-pull-secret -n your-namespace -o yaml \
   | kubectl apply -f -
 ```
 
+### Step 3a: Build and push the image, then substitute it
+
+`openbrain-api-deployment.yaml` ships a deliberate placeholder
+(`REPLACE-ME.azurecr.io/openbrain/api:REPLACE-ME`). Nothing builds it for you --
+CI publishes to GHCR, which is not where this manifest points -- so applying the
+file unedited gives `ImagePullBackOff`.
+
+```bash
+TAG=$(date -u +%Y%m%d-%H%M%S)
+REGISTRY=your-registry.azurecr.io          # the one whose pull secret you copied above
+
+az acr login --name "${REGISTRY%%.*}"
+docker build -t "$REGISTRY/openbrain/api:$TAG" .
+docker push "$REGISTRY/openbrain/api:$TAG"
+
+sed -i "s|REPLACE-ME.azurecr.io/openbrain/api:REPLACE-ME|$REGISTRY/openbrain/api:$TAG|" \
+  deploy/on-prem/k8s/openbrain-api-deployment.yaml
+```
+
+Dated tags rather than `:latest`, so a rollback is `kubectl rollout undo` and a
+running pod's image says which build it is.
+
+**Upgrading an existing install?** Do not re-apply the whole manifest -- it would
+also overwrite any live tuning of replicas or resource limits. Just move the
+image:
+
+```bash
+kubectl -n openbrain set image deployment/openbrain-api openbrain-api="$REGISTRY/openbrain/api:$TAG"
+kubectl -n openbrain rollout status deployment/openbrain-api
+```
+
 ### Step 4: Apply Manifests
 
 Apply the Kubernetes resources in dependency order. The session affinity patch is critical — without it, MCP SSE connections can break when requests land on different pods.
@@ -172,12 +203,31 @@ kubectl apply -f k8s/postgres-statefulset.yaml
 kubectl apply -f k8s/openbrain-api-deployment.yaml
 kubectl apply -f k8s/openbrain-api-service-metallb.yaml
 kubectl apply -f k8s/openbrain-tailscale-service.yaml    # Tailscale MagicDNS (tailnet only)
-kubectl apply -f k8s/openbrain-tailscale-funnel.yaml     # Tailscale Funnel (public HTTPS)
+kubectl apply -f k8s/openbrain-tailscale-funnel.yaml     # ALSO tailnet only - see note below
 
 # Enable session affinity on the ClusterIP service (required for multi-replica SSE)
 kubectl patch svc openbrain-api -n openbrain \
   -p '{"spec":{"sessionAffinity":"ClientIP","sessionAffinityConfig":{"clientIP":{"timeoutSeconds":3600}}}}'
 ```
+
+> **`openbrain-tailscale-funnel.yaml` does not enable Funnel**, despite the name
+> and the `tailscale.com/funnel: "true"` annotation. The operator honours that
+> annotation on an **Ingress** with `ingressClassName: tailscale`, not on a
+> LoadBalancer Service. On a Service it creates a tailnet device and DNATs the
+> port, with no `tailscale serve` config — and Funnel requires one.
+>
+> Consequences worth knowing before you debug it:
+>
+> - the endpoint is reachable from the **tailnet only**, not the public internet
+> - there is **no TLS termination**, so it speaks plain HTTP on port 443:
+>   `http://<host>.<tailnet>.ts.net:443/` works, `https://…` always fails
+> - the operator appends a suffix if the hostname is taken, so the device may be
+>   `openbrain-1`. Read the real name from
+>   `kubectl get svc openbrain-funnel -n openbrain -o jsonpath='{.status.loadBalancer.ingress}'`
+>
+> Verify with `kubectl exec -n tailscale <proxy-pod> -c tailscale -- tailscale serve status`.
+> `No serve config` confirms it. The Ingress form that does work is written out in
+> the manifest's own comments.
 
 ### Step 5: Wait and Verify
 

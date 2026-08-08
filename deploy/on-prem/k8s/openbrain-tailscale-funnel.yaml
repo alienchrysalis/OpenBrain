@@ -1,21 +1,58 @@
-# Tailscale Funnel Service for OpenBrain
-# Exposes OpenBrain MCP server to the PUBLIC INTERNET via Tailscale Funnel.
+# Tailscale Service for OpenBrain MCP.
 #
-# Unlike the regular Tailscale service, Funnel allows devices that are NOT
-# on your tailnet to connect over HTTPS.
+# NAME NOTWITHSTANDING, THIS DOES NOT ENABLE FUNNEL. Measured on a live cluster
+# with the Tailscale operator v1.92.4 on 2026-08-08: the operator honours
+# `tailscale.com/funnel` on an **Ingress** with `ingressClassName: tailscale`,
+# not on a LoadBalancer Service. On a Service it creates a tailnet device and
+# DNATs the port -- no `tailscale serve` config, and Funnel requires one:
 #
-# Public URL: https://openbrain.tailfb4202.ts.net
-#   MCP SSE:  https://openbrain.tailfb4202.ts.net/sse?key=<MCP_ACCESS_KEY>
-#   Health:   https://openbrain.tailfb4202.ts.net/health
+#     tailscale serve status   ->  "No serve config"
 #
-# Funnel terminates TLS for you — the backend stays plain HTTP.
-# Only port 443 is exposed externally; traffic is forwarded to MCP port 8080.
+# So there is no TLS termination either, and the endpoint is reachable from the
+# tailnet only:
 #
-# Prerequisites:
+#     http://<host>.<tailnet>.ts.net:443/          -> works (404 on / is healthy)
+#     https://<host>.<tailnet>.ts.net/             -> TLS error, always
+#
+# Probing it with https:// and reading the TLS failure as an outage is an easy
+# mistake; it has been made once already.
+#
+# The tailnet ACL prerequisite below is genuinely required for Funnel and is
+# already satisfied on this tailnet -- it is not what is missing.
+#
+# To get an actual public Funnel, replace this Service with an Ingress:
+#
+#     apiVersion: networking.k8s.io/v1
+#     kind: Ingress
+#     metadata:
+#       name: openbrain-funnel
+#       namespace: openbrain
+#       annotations:
+#         tailscale.com/funnel: "true"
+#     spec:
+#       ingressClassName: tailscale
+#       defaultBackend:
+#         service:
+#           name: openbrain-api
+#           port: { number: 8080 }
+#       tls:
+#         - hosts: [openbrain]
+#
+# Consider whether you want that. It is a second public entry point to the MCP
+# server, which may already be exposed another way (this cluster reaches it via
+# a Cloudflare tunnel at brain.planforge.software). The MCP endpoint is guarded
+# by MCP_ACCESS_KEY, not by network position.
+#
+# Prerequisites for the Ingress form:
 #   1. Tailscale K8s Operator is installed
 #   2. Funnel is enabled in your tailnet ACL policy:
 #        "nodeAttrs": [{ "target": ["tag:k8s"], "attr": ["funnel"] }]
-#   3. HTTPS must be enabled in your tailnet (Admin Console → DNS → HTTPS Certificates)
+#   3. HTTPS is enabled in your tailnet (Admin Console -> DNS -> HTTPS Certificates)
+#
+# Note also: the operator appends a suffix if the requested hostname is taken,
+# so the device may come up as `openbrain-1` rather than `openbrain`. Check
+# `kubectl get svc openbrain-funnel -o jsonpath='{.status.loadBalancer.ingress}'`
+# for the real name rather than assuming the one requested below.
 
 apiVersion: v1
 kind: Service

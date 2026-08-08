@@ -30,7 +30,12 @@ spec:
     spec:
       containers:
       - name: openbrain-api
-        image: your-registry.azurecr.io/openbrain/api:latest
+        # PLACEHOLDER -- this manifest will not run as-is. Build and push the image
+        # to your own registry first and substitute it here, or the pod lands in
+        # ImagePullBackOff. See docs/09-SELF-HOSTED-K8S.md, Step 3a.
+        # Applying this file unedited to a cluster that already runs OpenBrain
+        # will replace a working image with this one.
+        image: REPLACE-ME.azurecr.io/openbrain/api:REPLACE-ME
         imagePullPolicy: Always
         ports:
         - name: api
