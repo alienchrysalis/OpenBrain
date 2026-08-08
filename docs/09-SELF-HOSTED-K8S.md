@@ -203,45 +203,44 @@ kubectl apply -f k8s/postgres-statefulset.yaml
 kubectl apply -f k8s/openbrain-api-deployment.yaml
 kubectl apply -f k8s/openbrain-api-service-metallb.yaml
 kubectl apply -f k8s/openbrain-tailscale-service.yaml    # Tailscale MagicDNS (tailnet only)
-kubectl apply -f k8s/openbrain-tailscale-funnel.yaml     # ALSO tailnet only - see note below
 kubectl apply -f k8s/openbrain-funnel-ingress.yaml       # PUBLIC HTTPS via real Funnel
+# k8s/openbrain-tailscale-funnel.yaml is RETIRED - superseded by the Ingress above
 
 # Enable session affinity on the ClusterIP service (required for multi-replica SSE)
 kubectl patch svc openbrain-api -n openbrain \
   -p '{"spec":{"sessionAffinity":"ClientIP","sessionAffinityConfig":{"clientIP":{"timeoutSeconds":3600}}}}'
 ```
 
-> **`openbrain-tailscale-funnel.yaml` does not enable Funnel**, despite the name
-> and the `tailscale.com/funnel: "true"` annotation. The operator honours that
-> annotation on an **Ingress** with `ingressClassName: tailscale`, not on a
-> LoadBalancer Service. On a Service it creates a tailnet device and DNATs the
-> port, with no `tailscale serve` config — and Funnel requires one.
+> **`openbrain-tailscale-funnel.yaml` is retired** and no longer applied. It
+> never enabled Funnel, despite the name and the `tailscale.com/funnel: "true"`
+> annotation. The operator honours that annotation on an **Ingress** with
+> `ingressClassName: tailscale`, not on a LoadBalancer Service. On a Service it
+> creates a tailnet device and DNATs the port, with no `tailscale serve` config
+> — and Funnel requires one.
 >
-> Consequences worth knowing before you debug it:
+> Consequences worth knowing, because they mislead in both directions:
 >
-> - the endpoint is reachable from the **tailnet only**, not the public internet
-> - there is **no TLS termination**, so it speaks plain HTTP on port 443:
->   `http://<host>.<tailnet>.ts.net:443/` works, `https://…` always fails
-> - the operator appends a suffix if the hostname is taken, so the device may be
->   `openbrain-1`. Read the real name from
->   `kubectl get svc openbrain-funnel -n openbrain -o jsonpath='{.status.loadBalancer.ingress}'`
+> - it was reachable from the **tailnet only**, never the public internet
+> - nothing terminated TLS, so it spoke plain HTTP on port 443:
+>   `http://<host>.<tailnet>.ts.net:443/` worked and `https://…` always failed.
+>   Any client building an `https://` URL against it could never have worked.
+> - the operator appends a suffix when a hostname is taken, so its device came up
+>   as `openbrain-1` rather than `openbrain`
 >
-> Verify with `kubectl exec -n tailscale <proxy-pod> -c tailscale -- tailscale serve status`.
-> `No serve config` confirms it.
+> Verify the distinction with
+> `kubectl exec -n tailscale <proxy-pod> -c tailscale -- tailscale serve status`.
+> `No serve config` means no Funnel.
 >
 > **`openbrain-funnel-ingress.yaml` is the form that works.** The same command
-> against its proxy reports `Funnel on`, TLS is terminated for you, and the
-> endpoint answers real HTTPS from outside the tailnet.
+> reports `Funnel on`, TLS is terminated for you, and one hostname serves both
+> the tailnet and the public internet — which removes the need for clients to
+> switch endpoints depending on where they are.
 >
 > ⚠ It is a **public internet** endpoint. Confirm the MCP server is guarded
 > first: the key check is skipped entirely when `MCP_ACCESS_KEY` is empty,
 > because the code reads `if (mcpAccessKey && key !== mcpAccessKey)`.
 > `/sse` must return **401** without a key. `/health` is unauthenticated by
 > design and returns only a status string.
->
-> The two can coexist — Service for tailnet-only, Ingress for public — but each
-> costs a tailnet device and a proxy pod, so drop the Service if nothing uses the
-> tailnet-only path.
 
 ### Step 5: Wait and Verify
 

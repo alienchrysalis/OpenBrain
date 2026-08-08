@@ -1,3 +1,8 @@
+# RETIRED 2026-08-08 -- superseded by openbrain-funnel-ingress.yaml. Kept for
+# reference because the name is misleading and the reasoning is worth having.
+# Do not apply it alongside the Ingress: it does not add a capability the Ingress
+# lacks, and each tailnet Service costs a device registration and a proxy pod.
+#
 # Tailscale Service for OpenBrain MCP.
 #
 # NAME NOTWITHSTANDING, THIS DOES NOT ENABLE FUNNEL. Measured on a live cluster
