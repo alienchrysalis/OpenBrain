@@ -1,7 +1,7 @@
 /**
  * REST API routes using Hono.
- * Provides /health, /memories, /memories/search, /memories/list, /memories/batch,
- * /memories/:id (PUT, DELETE), /stats endpoints.
+ * Provides /health, /metrics, /memories, /memories/search, /memories/list,
+ * /memories/batch, /memories/:id (PUT, DELETE), /stats endpoints.
  */
 
 import { Hono } from "hono";
@@ -22,6 +22,7 @@ import {
   type BatchThoughtInput,
 } from "../db/queries.js";
 import { getEmbedder } from "../embedder/index.js";
+import { recordRequest, renderMetrics } from "./metrics.js";
 import {
   validateCaptureInput,
   validateBatchInput,
@@ -32,6 +33,8 @@ import {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+const METRICS_PATH = "/metrics";
+
 export function createApi(): Hono {
   const app = new Hono();
   const embedder = getEmbedder();
@@ -39,7 +42,27 @@ export function createApi(): Hono {
 
   // Middleware
   app.use("*", cors());
-  app.use("*", logger());
+
+  // Prometheus scrapes every few seconds per replica, so logging those would
+  // drown the useful lines in Loki without telling anyone anything.
+  const requestLogger = logger();
+  app.use("*", async (c, next) => {
+    if (c.req.path === METRICS_PATH) return next();
+    return requestLogger(c, next);
+  });
+
+  app.use("*", async (c, next) => {
+    const start = performance.now();
+    await next();
+    if (c.req.path === METRICS_PATH) return;
+    // routePath, not path: the raw URL would put every UUID in a label.
+    recordRequest(
+      c.req.method,
+      c.req.routePath,
+      c.res.status,
+      (performance.now() - start) / 1000
+    );
+  });
 
   // Global error handler — return structured JSON for all errors
   app.onError((err, c) => {
@@ -71,6 +94,16 @@ export function createApi(): Hono {
       status: "healthy",
       service: "open-brain-api",
       capabilities,
+    });
+  });
+
+  // ─── Prometheus Metrics ──────────────────────────────────────────
+
+  // The pod already advertises prometheus.io/scrape on this path; until this
+  // route existed the scrape only ever returned 404.
+  app.get(METRICS_PATH, (c) => {
+    return c.text(renderMetrics(pool), 200, {
+      "Content-Type": "text/plain; version=0.0.4; charset=utf-8",
     });
   });
 

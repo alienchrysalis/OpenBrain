@@ -70,6 +70,18 @@ describe("REST API Routes", () => {
     expect(body.status).toBe("healthy");
   });
 
+  // ─── Metrics ───────────────────────────────────────────────────────
+
+  it("GET /metrics serves Prometheus text, not 404", async () => {
+    const res = await app.request("/metrics");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/plain");
+    const body = await res.text();
+    expect(body).toContain("# TYPE openbrain_build_info gauge");
+    // The pool mock here has no count fields; undefined would break the scrape.
+    expect(body).not.toContain("undefined");
+  });
+
   // ─── POST /memories ────────────────────────────────────────────────
 
   it("POST /memories accepts project and supersedes", async () => {
