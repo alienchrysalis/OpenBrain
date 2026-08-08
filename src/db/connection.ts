@@ -37,9 +37,39 @@ export function getPool(): pg.Pool {
   return pool;
 }
 
+/** Milliseconds to wait before each successive connection attempt. */
+export const STARTUP_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000, 8_000];
+
+async function connectWithRetry(db: pg.Pool): Promise<pg.PoolClient> {
+  const attempts = STARTUP_RETRY_DELAYS_MS.length + 1;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await db.connect();
+    } catch (err) {
+      const last = i === attempts - 1;
+      const message = err instanceof Error ? err.message : String(err);
+      if (last) {
+        console.error(`[db] Could not connect after ${attempts} attempts: ${message}`);
+        throw err;
+      }
+      const wait = STARTUP_RETRY_DELAYS_MS[i] ?? 1_000;
+      console.warn(`[db] Connect failed (${message}). Retrying in ${wait}ms…`);
+      await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+  }
+  // Unreachable: the loop either returns a client or throws on the last attempt.
+  throw new Error("[db] connectWithRetry exhausted without result");
+}
+
 export async function initializeDatabase(): Promise<void> {
   const db = getPool();
-  const client = await db.connect();
+  // Retries because the first connection can lose a race that has nothing to do
+  // with the database. Under a NetworkPolicy engine the pod's IP is not in the
+  // allowed-sources set for the first second or so of its life, so a connection
+  // opened immediately is refused; a second later it succeeds. Connecting once
+  // and exiting made that a crash on every single rollout, 100% reproducible.
+  // The same window covers an ordinary Postgres restart or a cold cluster boot.
+  const client = await connectWithRetry(db);
   try {
     await client.query("CREATE EXTENSION IF NOT EXISTS vector");
     const result = await client.query("SELECT COUNT(*) FROM thoughts");
