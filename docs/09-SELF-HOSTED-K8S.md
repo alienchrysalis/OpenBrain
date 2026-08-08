@@ -204,6 +204,7 @@ kubectl apply -f k8s/openbrain-api-deployment.yaml
 kubectl apply -f k8s/openbrain-api-service-metallb.yaml
 kubectl apply -f k8s/openbrain-tailscale-service.yaml    # Tailscale MagicDNS (tailnet only)
 kubectl apply -f k8s/openbrain-tailscale-funnel.yaml     # ALSO tailnet only - see note below
+kubectl apply -f k8s/openbrain-funnel-ingress.yaml       # PUBLIC HTTPS via real Funnel
 
 # Enable session affinity on the ClusterIP service (required for multi-replica SSE)
 kubectl patch svc openbrain-api -n openbrain \
@@ -226,8 +227,21 @@ kubectl patch svc openbrain-api -n openbrain \
 >   `kubectl get svc openbrain-funnel -n openbrain -o jsonpath='{.status.loadBalancer.ingress}'`
 >
 > Verify with `kubectl exec -n tailscale <proxy-pod> -c tailscale -- tailscale serve status`.
-> `No serve config` confirms it. The Ingress form that does work is written out in
-> the manifest's own comments.
+> `No serve config` confirms it.
+>
+> **`openbrain-funnel-ingress.yaml` is the form that works.** The same command
+> against its proxy reports `Funnel on`, TLS is terminated for you, and the
+> endpoint answers real HTTPS from outside the tailnet.
+>
+> ⚠ It is a **public internet** endpoint. Confirm the MCP server is guarded
+> first: the key check is skipped entirely when `MCP_ACCESS_KEY` is empty,
+> because the code reads `if (mcpAccessKey && key !== mcpAccessKey)`.
+> `/sse` must return **401** without a key. `/health` is unauthenticated by
+> design and returns only a status string.
+>
+> The two can coexist — Service for tailnet-only, Ingress for public — but each
+> costs a tailnet device and a proxy pod, so drop the Service if nothing uses the
+> tailnet-only path.
 
 ### Step 5: Wait and Verify
 
