@@ -38,3 +38,23 @@ export function describeRequestHeaders(
     .join(" ");
   return `names=[${names}] ${values} remoteAddress=${remoteAddress ?? "?"}`;
 }
+
+/**
+ * Best available client address.
+ *
+ * Only `cf-connecting-ip` is trusted: Cloudflare sets it and a caller cannot forge it
+ * through that path. `x-forwarded-for` is deliberately ignored — Cloudflare *appends*
+ * to it, so a spoofed value arrives as `<spoofed>, <real>` and reading the first
+ * element would log an attacker-chosen string as the client.
+ *
+ * The Funnel hostname and in-cluster callers do not pass through Cloudflare, so the
+ * header is absent there and the socket address is the real peer.
+ */
+export function clientAddress(
+  headers: NodeJS.Dict<string | string[]>,
+  remoteAddress: string | undefined
+): string {
+  const cf = headers["cf-connecting-ip"];
+  if (typeof cf === "string" && cf.length > 0) return safeLogValue(cf);
+  return remoteAddress ? `${safeLogValue(remoteAddress)} (direct)` : "unknown";
+}

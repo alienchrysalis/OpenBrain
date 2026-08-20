@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.3] - 2026-08-20
+
+### Added
+- `/sse` connect and denial logs carry `addr=<client address>`, so a leaked key can be
+  traced to where it was used rather than only to when (#18). Measured first: the real
+  client IP does survive Cloudflare → Tailscale Funnel → pod, arriving as
+  `cf-connecting-ip`, while `req.socket.remoteAddress` is only the in-cluster proxy.
+  Only `cf-connecting-ip` is trusted — Cloudflare *appends* to `x-forwarded-for`, so
+  reading that would let a caller write an arbitrary address into the audit log.
+- `MCP_LOG_HEADERS` (default off) dumps the header names present on a `/sse` handshake
+  plus the values of address-carrying headers only. `x-brain-key` arrives on that same
+  request, so a diagnostic printing every value would write live keys into the log it
+  exists to secure.
+
 ## [0.8.2] - 2026-08-20
 
 ### Fixed

@@ -21,7 +21,7 @@ import { createApi } from "./api/routes.js";
 import { createMcpServer } from "./mcp/server.js";
 import { authenticateAccessKey, checkKeySources } from "./auth/accessKeys.js";
 import { recordMcpHandshake, type KeySource } from "./api/metrics.js";
-import { safeLogValue, describeRequestHeaders } from "./mcp/requestLog.js";
+import { safeLogValue, describeRequestHeaders, clientAddress } from "./mcp/requestLog.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 
 /** An SSE session plus the identity of the key that opened it. */
@@ -127,6 +127,7 @@ async function main(): Promise<void> {
           ? "query"
           : "none";
       const client = safeLogValue(req.headers["user-agent"]);
+      const addr = clientAddress(req.headers, req.socket.remoteAddress);
 
       if (logHeaders) {
         console.log(
@@ -154,7 +155,9 @@ async function main(): Promise<void> {
       recordMcpHandshake(keySource, auth.ok ? "ok" : auth.reason);
 
       if (!auth.ok) {
-        console.warn(`[mcp] /sse denied (${auth.reason}) via=${keySource} client="${client}"`);
+        console.warn(
+          `[mcp] /sse denied (${auth.reason}) via=${keySource} addr=${addr} client="${client}"`
+        );
         res.writeHead(auth.reason === "unavailable" ? 503 : 401, {
           "Content-Type": "application/json",
         });
@@ -182,7 +185,7 @@ async function main(): Promise<void> {
       const server = createMcpServer();
       await server.connect(transport);
       console.log(
-        `[mcp] SSE session ${sessionId} connected (key: ${auth.label}${auth.keyId ? ` / ${auth.keyId}` : ""}) via=${keySource} client="${client}"`
+        `[mcp] SSE session ${sessionId} connected (key: ${auth.label}${auth.keyId ? ` / ${auth.keyId}` : ""}) via=${keySource} addr=${addr} client="${client}"`
       );
       return;
     }
