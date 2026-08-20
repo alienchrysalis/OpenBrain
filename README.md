@@ -1040,6 +1040,16 @@ npm run key -- revoke --id <uuid>                  # stamps revoked_at, keeps th
 Give the key to the client as the `x-brain-key` header. Revoking one key leaves
 every other client working.
 
+**Where to run it.** The CLI needs a build (`dist/cli/accessKey.js`) *and* a database
+connection, so it runs wherever the server does — not on a laptop pointed at a remote
+deployment, which fails with a connection error rather than anything about keys. For
+Kubernetes:
+
+```bash
+POD=$(kubectl get pods -n openbrain -l app=openbrain-api -o jsonpath='{.items[0].metadata.name}')
+kubectl exec -n openbrain "$POD" -- npm run key -- mint --label toby-laptop
+```
+
 `MCP_ACCESS_KEY` still authenticates as a shared fallback so existing deployments
 keep working. To fold it into the table:
 
