@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.4] - 2026-08-20
+
+### Changed
+- `/health` is no longer request-logged, matching the existing treatment of `/metrics`.
+  Measured on a live pod: **75% of log lines were health checks** — roughly 5,000 a day
+  per replica — burying the access-key audit records added in 0.8.1 and 0.8.3. An audit
+  trail nobody can find in the noise is not an audit trail.
+- `createApi()` takes an optional `log` function. Without it the quiet-path behaviour
+  cannot be tested at all: vitest replaces console and stdout, and hono binds
+  `console.log` when `logger()` is constructed, so both a console spy and a stdout spy
+  observe nothing and the assertion passes vacuously whatever the code does.
+
 ## [0.8.3] - 2026-08-20
 
 ### Added

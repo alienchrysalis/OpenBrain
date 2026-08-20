@@ -82,6 +82,30 @@ describe("REST API Routes", () => {
     expect(body).not.toContain("undefined");
   });
 
+  // ─── Request logging ───────────────────────────────────────────────
+
+  // Probe and scrape traffic once made up 75% of a pod's log, burying the MCP
+  // access-key audit lines. Silence here is the feature, so it needs a test that
+  // can actually observe a log line being written or not.
+  it("does not log probe and scrape traffic", async () => {
+    const lines: string[] = [];
+    const quietApp = createApi({ log: (m) => lines.push(m) });
+
+    await quietApp.request("/health");
+    await quietApp.request("/metrics");
+
+    expect(lines).toEqual([]);
+  });
+
+  it("still logs ordinary requests", async () => {
+    const lines: string[] = [];
+    const quietApp = createApi({ log: (m) => lines.push(m) });
+
+    await quietApp.request("/stats");
+
+    expect(lines.join("\n")).toContain("/stats");
+  });
+
   // ─── POST /memories ────────────────────────────────────────────────
 
   it("POST /memories accepts project and supersedes", async () => {

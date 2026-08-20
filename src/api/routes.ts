@@ -35,7 +35,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 const METRICS_PATH = "/metrics";
 
-export function createApi(): Hono {
+export function createApi(options: { log?: (message: string, ...rest: string[]) => void } = {}): Hono {
   const app = new Hono();
   const embedder = getEmbedder();
   const pool = getPool();
@@ -43,11 +43,17 @@ export function createApi(): Hono {
   // Middleware
   app.use("*", cors());
 
-  // Prometheus scrapes every few seconds per replica, so logging those would
-  // drown the useful lines in Loki without telling anyone anything.
-  const requestLogger = logger();
+  // Prometheus scrapes every few seconds per replica, and the kubelet probes
+  // /health just as often, so logging those would drown the useful lines in Loki
+  // without telling anyone anything. Measured before adding /health here: 75% of a
+  // pod's log was health checks, burying the MCP access-key audit records.
+  const QUIET_PATHS = new Set([METRICS_PATH, "/health"]);
+  // options.log exists so tests can observe this: vitest replaces console and
+  // stdout, and hono binds console.log when logger() is constructed, so neither
+  // a console spy nor a stdout spy can see whether a line was written.
+  const requestLogger = logger(options.log);
   app.use("*", async (c, next) => {
-    if (c.req.path === METRICS_PATH) return next();
+    if (QUIET_PATHS.has(c.req.path)) return next();
     return requestLogger(c, next);
   });
 
