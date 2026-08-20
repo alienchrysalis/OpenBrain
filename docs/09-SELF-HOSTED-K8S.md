@@ -160,12 +160,20 @@ kubectl get secret acr-pull-secret -n your-namespace -o yaml \
   | kubectl apply -f -
 ```
 
-### Step 3a: Build and push the image, then substitute it
+### Step 3a: Pick an image
 
-`openbrain-api-deployment.yaml` pins a private ACR image that only this project's
-maintainer can pull. Nothing builds it for you — CI publishes to GHCR, which is not
-where this manifest points — so applying the file unedited gives `ImagePullBackOff`
-or `ErrImagePull`.
+`openbrain-api-deployment.yaml` points at the image CI publishes on every push to
+master:
+
+```
+ghcr.io/srnichols/openbrain/api:<commit-sha>
+```
+
+That package is public, so no pull secret is needed for it and the manifest works
+as-is. Commit-SHA tags rather than `:latest`, so a rollback is `kubectl rollout undo`
+and a running pod's image says which build it is.
+
+**Want your own build instead?** Any registry works — build, push, and substitute:
 
 ```bash
 TAG=$(date -u +%Y%m%d-%H%M%S)
@@ -178,9 +186,6 @@ docker push "$REGISTRY/openbrain/api:$TAG"
 sed -i "s|image: .*/openbrain/api:.*|image: $REGISTRY/openbrain/api:$TAG|" \
   deploy/on-prem/k8s/openbrain-api-deployment.yaml
 ```
-
-Dated tags rather than `:latest`, so a rollback is `kubectl rollout undo` and a
-running pod's image says which build it is.
 
 **Upgrading an existing install?** Do not re-apply the whole manifest -- it would
 also overwrite any live tuning of replicas or resource limits. Just move the

@@ -30,12 +30,11 @@ spec:
     spec:
       containers:
       - name: openbrain-api
-        # This is the image this cluster actually runs. It lives in a private ACR,
-        # pulled via the acr-pull-secret below — substitute your own registry when
-        # adopting these manifests, or the pod lands in ImagePullBackOff.
-        # See docs/09-SELF-HOSTED-K8S.md, Step 3a.
-        # Deployed 2026-08-20 from commit 24d8ba2 (also tagged sha-24d8ba2 in ACR).
-        image: acrupickshared.azurecr.io/openbrain/api:20260820-043413
+        # Published by CI on every push to master (.github/workflows/ci.yml) and
+        # public, so no pull secret is needed for it. Tagged with the commit SHA
+        # rather than :latest, so a pod's image says exactly which build it is and
+        # a rollback is `kubectl rollout undo`.
+        image: ghcr.io/srnichols/openbrain/api:5b51ff60d5e6860a4eaf43c8eea1ce10c407fd66
         imagePullPolicy: Always
         ports:
         - name: api
@@ -160,6 +159,9 @@ spec:
                   - openbrain-api
               topologyKey: kubernetes.io/hostname
 
+      # Not needed by the GHCR image above, which is public. Kept because the
+      # previous ReplicaSet still references a private ACR tag, and removing this
+      # would leave `kubectl rollout undo` unable to pull.
       imagePullSecrets:
       - name: acr-pull-secret
       terminationGracePeriodSeconds: 30

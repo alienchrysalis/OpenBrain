@@ -16,6 +16,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `client=<user-agent>`, so a query-param user can be identified and reconfigured
   rather than just counted.
 
+### Fixed
+- CI publishes images again. The `docker` job had failed on **every** push to master
+  since 2026-03-25 with `invalid tag "ghcr.io/srnichols/OpenBrain:latest": repository
+  name must be lowercase`; `build-and-test` passed throughout, which is why it went
+  unnoticed. The image name is now lowercased, and it publishes to
+  `ghcr.io/srnichols/openbrain/api` — a package created by this workflow, so
+  `GITHUB_TOKEN` can write it and it inherits the repo's public visibility. The bare
+  `ghcr.io/srnichols/openbrain` package predates the workflow, is not linked to the
+  repo, and rejected the push with `permission_denied: write_package`.
+- `deploy/on-prem/k8s/openbrain-api-deployment.yaml` now points at that GHCR image, so
+  the manifest applies as-is without a private registry.
+
 ## [0.8.0] - 2026-08-19
 
 ### Added
