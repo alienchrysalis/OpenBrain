@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2026-08-20
+
+### Added
+- `openbrain_mcp_handshakes_total{source,outcome}` on `/metrics` — counts `/sse`
+  handshakes by whether the key arrived as the `x-brain-key` header, as `?key=`, or
+  not at all. Turning `MCP_ALLOW_KEY_IN_QUERY` off is a breaking change for anyone
+  still using the URL form, and until now there was no way to tell whether anyone was:
+  the MCP listener logged nothing per request.
+- `/sse` connect and denial logs now carry `via=<source>` and a sanitised
+  `client=<user-agent>`, so a query-param user can be identified and reconfigured
+  rather than just counted.
+
 ## [0.8.0] - 2026-08-19
 
 ### Added

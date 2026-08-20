@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import type pg from "pg";
 
-import { recordRequest, renderMetrics, resetMetrics } from "../metrics.js";
+import { recordRequest, recordMcpHandshake, renderMetrics, resetMetrics } from "../metrics.js";
 
 function fakePool(overrides: Partial<pg.Pool> = {}): pg.Pool {
   return { totalCount: 5, idleCount: 3, waitingCount: 0, ...overrides } as pg.Pool;
@@ -83,5 +83,36 @@ describe("metrics exposition", () => {
     recordRequest("GET", 'a"b\\c', 200, 0.1);
     const out = renderMetrics(fakePool());
     expect(out).toContain('route="a\\"b\\\\c"');
+  });
+});
+
+// The whole point of this counter is deciding whether MCP_ALLOW_KEY_IN_QUERY can
+// be turned off. If it under-reports the query source, the decision is wrong.
+describe("MCP handshake counter", () => {
+  beforeEach(() => {
+    resetMetrics();
+  });
+
+  it("separates header from query usage", () => {
+    recordMcpHandshake("header", "ok");
+    recordMcpHandshake("header", "ok");
+    recordMcpHandshake("query", "ok");
+    const out = renderMetrics(fakePool());
+    expect(out).toContain('openbrain_mcp_handshakes_total{source="header",outcome="ok"} 2');
+    expect(out).toContain('openbrain_mcp_handshakes_total{source="query",outcome="ok"} 1');
+  });
+
+  it("records denials, including a query key rejected by the flag", () => {
+    recordMcpHandshake("query", "missing");
+    recordMcpHandshake("none", "missing");
+    recordMcpHandshake("header", "revoked");
+    const out = renderMetrics(fakePool());
+    expect(out).toContain('openbrain_mcp_handshakes_total{source="query",outcome="missing"} 1');
+    expect(out).toContain('openbrain_mcp_handshakes_total{source="none",outcome="missing"} 1');
+    expect(out).toContain('openbrain_mcp_handshakes_total{source="header",outcome="revoked"} 1');
+  });
+
+  it("emits nothing before any handshake, so zero means zero", () => {
+    expect(renderMetrics(fakePool())).not.toContain("openbrain_mcp_handshakes_total{");
   });
 });

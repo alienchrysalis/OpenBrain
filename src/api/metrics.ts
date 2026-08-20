@@ -25,6 +25,15 @@ const PROCESS_START_MS = Date.now();
 const requestTotals = new Map<string, number>();
 const durationTotals = new Map<string, number>();
 
+/**
+ * MCP `/sse` handshakes by how the key arrived. This exists to answer one
+ * question with evidence rather than assumption: does anything still send the
+ * key as `?key=`, so can MCP_ALLOW_KEY_IN_QUERY be turned off?
+ */
+const mcpHandshakeTotals = new Map<string, number>();
+
+export type KeySource = "header" | "query" | "none";
+
 const SEP = "\u0000";
 
 export function recordRequest(
@@ -38,10 +47,16 @@ export function recordRequest(
   durationTotals.set(key, (durationTotals.get(key) ?? 0) + durationSeconds);
 }
 
+export function recordMcpHandshake(source: KeySource, outcome: string): void {
+  const key = [source, outcome].join(SEP);
+  mcpHandshakeTotals.set(key, (mcpHandshakeTotals.get(key) ?? 0) + 1);
+}
+
 /** Test-only: clears accumulated counters so assertions start from zero. */
 export function resetMetrics(): void {
   requestTotals.clear();
   durationTotals.clear();
+  mcpHandshakeTotals.clear();
 }
 
 function escapeLabelValue(value: string): string {
@@ -109,6 +124,20 @@ export function renderMetrics(pool: pg.Pool): string {
       "openbrain_http_request_duration_seconds_sum",
       { method: method ?? "", route: route ?? "", status: status ?? "" },
       seconds
+    );
+  }
+
+  out += header(
+    "openbrain_mcp_handshakes_total",
+    "MCP /sse handshakes by how the access key was supplied.",
+    "counter"
+  );
+  for (const [key, count] of mcpHandshakeTotals) {
+    const [source, outcome] = key.split(SEP);
+    out += renderSample(
+      "openbrain_mcp_handshakes_total",
+      { source: source ?? "", outcome: outcome ?? "" },
+      count
     );
   }
 

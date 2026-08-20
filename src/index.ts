@@ -20,6 +20,7 @@ import { initializeDatabase, closePool, getPool } from "./db/connection.js";
 import { createApi } from "./api/routes.js";
 import { createMcpServer } from "./mcp/server.js";
 import { authenticateAccessKey, checkKeySources } from "./auth/accessKeys.js";
+import { recordMcpHandshake, type KeySource } from "./api/metrics.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 
 /** An SSE session plus the identity of the key that opened it. */
@@ -27,6 +28,12 @@ interface McpSession {
   transport: SSEServerTransport;
   keyId: string | null;
   keyLabel: string;
+}
+
+/** User-Agent is caller-controlled, and a newline in a log line forges a record. */
+function safeUserAgent(value: string | undefined): string {
+  if (!value) return "unknown";
+  return value.replace(/[\p{Cc}\p{Cf}]/gu, " ").slice(0, 80);
 }
 
 async function main(): Promise<void> {
@@ -113,10 +120,18 @@ async function main(): Promise<void> {
     // Auth is checked here; /messages skips the key check because
     // having a valid sessionId proves the client already authenticated.
     if (url.pathname === "/sse" && req.method === "GET") {
+      const headerKey = req.headers["x-brain-key"] as string | undefined;
       const queryKey = allowKeyInQuery ? url.searchParams.get("key") : null;
-      const key = (req.headers["x-brain-key"] as string | undefined) ?? queryKey;
+      const key = headerKey ?? queryKey;
 
-      if (!allowKeyInQuery && !key && url.searchParams.has("key")) {
+      const keySource: KeySource = headerKey
+        ? "header"
+        : url.searchParams.has("key")
+          ? "query"
+          : "none";
+      const client = safeUserAgent(req.headers["user-agent"]);
+
+      if (!allowKeyInQuery && keySource === "query") {
         console.warn(
           "[mcp] /sse denied: key supplied as ?key= but MCP_ALLOW_KEY_IN_QUERY is off"
         );
@@ -133,8 +148,10 @@ async function main(): Promise<void> {
         return { ok: false as const, reason: "unavailable" as const };
       });
 
+      recordMcpHandshake(keySource, auth.ok ? "ok" : auth.reason);
+
       if (!auth.ok) {
-        console.warn(`[mcp] /sse denied (${auth.reason})`);
+        console.warn(`[mcp] /sse denied (${auth.reason}) via=${keySource} client="${client}"`);
         res.writeHead(auth.reason === "unavailable" ? 503 : 401, {
           "Content-Type": "application/json",
         });
@@ -162,7 +179,7 @@ async function main(): Promise<void> {
       const server = createMcpServer();
       await server.connect(transport);
       console.log(
-        `[mcp] SSE session ${sessionId} connected (key: ${auth.label}${auth.keyId ? ` / ${auth.keyId}` : ""})`
+        `[mcp] SSE session ${sessionId} connected (key: ${auth.label}${auth.keyId ? ` / ${auth.keyId}` : ""}) via=${keySource} client="${client}"`
       );
       return;
     }
