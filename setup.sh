@@ -46,6 +46,66 @@ ask_choice() {
     echo "${result:-$default}"
 }
 
+# Merge a JSON fragment into a config file instead of replacing it.
+# Overwriting silently discards every other MCP server and setting the user
+# has, so this backs up first and refuses to write at all when no JSON-aware
+# tool is available, rather than guessing.
+merge_json_config() {
+    local target="$1" fragment="$2" label="$3"
+
+    if [[ ! -f "$target" ]]; then
+        printf '%s\n' "$fragment" > "$target"
+        ok "$label created at $target"
+        return
+    fi
+
+    local stamp backup tmp fragfile merged
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    backup="${target}.openbrain-backup-${stamp}"
+    tmp="${target}.openbrain-tmp.$$"
+    fragfile="${target}.openbrain-fragment.$$"
+    merged=false
+
+    cp "$target" "$backup"
+    printf '%s\n' "$fragment" > "$fragfile"
+
+    if command -v jq &>/dev/null; then
+        # `*` is jq's recursive object merge: existing keys survive.
+        if jq -s '.[0] * .[1]' "$target" "$fragfile" > "$tmp" 2>/dev/null; then
+            merged=true
+        fi
+    elif command -v node &>/dev/null; then
+        if node -e '
+const fs = require("fs");
+const deepMerge = (a, b) => {
+  for (const k of Object.keys(b)) {
+    const mergeable = (v) => v && typeof v === "object" && !Array.isArray(v);
+    a[k] = mergeable(b[k]) && mergeable(a[k]) ? deepMerge(a[k], b[k]) : b[k];
+  }
+  return a;
+};
+const target = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+const fragment = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+process.stdout.write(JSON.stringify(deepMerge(target, fragment), null, 2) + "\n");
+' "$target" "$fragfile" > "$tmp" 2>/dev/null; then
+            merged=true
+        fi
+    fi
+
+    rm -f "$fragfile"
+
+    if $merged; then
+        mv "$tmp" "$target"
+        ok "$label updated at $target (backup: $backup)"
+        return
+    fi
+
+    rm -f "$tmp" "$backup"
+    warn "$label left untouched — need jq or node to merge JSON, or the file is not valid JSON."
+    echo "  Add this to $target by hand:"
+    printf '%s\n' "$fragment" | sed 's/^/    /'
+}
+
 # ── Banner ───────────────────────────────────────────────────────────
 
 echo ""
@@ -232,6 +292,10 @@ EOF
 # MCP Authentication
 MCP_ACCESS_KEY=$MCP_KEY
 
+# Accept the key as ?key= in the URL. Off by default — query strings are logged
+# by proxies. Only needed for clients that cannot send the x-brain-key header.
+MCP_ALLOW_KEY_IN_QUERY=false
+
 # Server Ports
 API_PORT=8000
 MCP_PORT=8080
@@ -285,7 +349,9 @@ fi
 
 step "Configure your AI client..."
 
-MCP_URL="http://localhost:8080/sse?key=$MCP_KEY_FROM_ENV"
+# Header auth, not ?key= — since 0.8.0 the URL form is refused unless
+# MCP_ALLOW_KEY_IN_QUERY=true, which the generated .env does not set.
+MCP_URL="http://localhost:8080/sse"
 
 echo ""
 echo "  Which AI client do you want to configure?"
@@ -300,19 +366,20 @@ case "$CLIENT" in
     1)
         mkdir -p "$SCRIPT_DIR/.vscode"
         SETTINGS="$SCRIPT_DIR/.vscode/settings.json"
-        cat > "$SETTINGS" << EOJSON
+        merge_json_config "$SETTINGS" "$(cat << EOJSON
 {
   "mcp": {
     "servers": {
       "openbrain": {
         "type": "sse",
-        "url": "$MCP_URL"
+        "url": "$MCP_URL",
+        "headers": { "x-brain-key": "$MCP_KEY_FROM_ENV" }
       }
     }
   }
 }
 EOJSON
-        ok "VS Code .vscode/settings.json created with MCP config"
+)" "VS Code .vscode/settings.json"
         echo "  → Reload VS Code window to activate"
         ;;
     2)
@@ -323,33 +390,34 @@ EOJSON
         fi
         mkdir -p "$CLAUDE_DIR"
         CONFIG="$CLAUDE_DIR/claude_desktop_config.json"
-        cat > "$CONFIG" << EOJSON
+        merge_json_config "$CONFIG" "$(cat << EOJSON
 {
   "mcpServers": {
     "openbrain": {
       "command": "npx",
-      "args": ["-y", "mcp-remote", "$MCP_URL"]
+      "args": ["-y", "mcp-remote", "$MCP_URL", "--header", "x-brain-key:$MCP_KEY_FROM_ENV"]
     }
   }
 }
 EOJSON
-        ok "Claude Desktop config created at $CONFIG"
+)" "Claude Desktop config"
         echo "  → Fully quit Claude Desktop and relaunch"
         ;;
     3)
         mkdir -p "$HOME/.claude"
         CONFIG="$HOME/.claude/settings.json"
-        cat > "$CONFIG" << EOJSON
+        merge_json_config "$CONFIG" "$(cat << EOJSON
 {
   "mcpServers": {
     "openbrain": {
       "type": "sse",
-      "url": "$MCP_URL"
+      "url": "$MCP_URL",
+      "headers": { "x-brain-key": "$MCP_KEY_FROM_ENV" }
     }
   }
 }
 EOJSON
-        ok "Claude Code settings updated"
+)" "Claude Code settings"
         echo "  → Restart Claude Code to activate"
         ;;
     *)

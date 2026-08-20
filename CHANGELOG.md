@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2] - 2026-08-20
+
+### Fixed
+- **`setup.sh` no longer destroys existing AI client configuration** (#13). All three
+  branches wrote their config with `cat > "$FILE"`, unconditionally replacing the file,
+  so any other MCP servers, permissions or editor settings were silently lost with no
+  warning and no backup. The reported case was `~/.claude/settings.json`, but
+  `.vscode/settings.json` and `claude_desktop_config.json` had the identical defect.
+  Configs are now merged (via `jq`, falling back to `node`), the original is backed up
+  to `<file>.openbrain-backup-<timestamp>`, and when neither tool is available — or the
+  file is not valid JSON — the file is left untouched and the snippet is printed for
+  manual merge.
+- `setup.ps1` merged `mcpServers` correctly but replaced the whole `mcp` key for VS
+  Code, dropping any other servers configured under `mcp.servers`, and overwrote the
+  file outright when it failed to parse. It now uses the same merge-and-back-up path.
+- **The wizards generated client configs that could not connect.** Both wrote
+  `http://localhost:8080/sse?key=<KEY>`, but 0.8.0 made `MCP_ALLOW_KEY_IN_QUERY`
+  default to false and the generated `.env` never set it, so a fresh install produced a
+  client that got 401. They now configure the `x-brain-key` header (and
+  `mcp-remote --header` for Claude Desktop), and the generated `.env` documents the flag.
+
 ## [0.8.1] - 2026-08-20
 
 ### Added
