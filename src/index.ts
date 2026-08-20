@@ -21,6 +21,7 @@ import { createApi } from "./api/routes.js";
 import { createMcpServer } from "./mcp/server.js";
 import { authenticateAccessKey, checkKeySources } from "./auth/accessKeys.js";
 import { recordMcpHandshake, type KeySource } from "./api/metrics.js";
+import { safeLogValue, describeRequestHeaders } from "./mcp/requestLog.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 
 /** An SSE session plus the identity of the key that opened it. */
@@ -28,12 +29,6 @@ interface McpSession {
   transport: SSEServerTransport;
   keyId: string | null;
   keyLabel: string;
-}
-
-/** User-Agent is caller-controlled, and a newline in a log line forges a record. */
-function safeUserAgent(value: string | undefined): string {
-  if (!value) return "unknown";
-  return value.replace(/[\p{Cc}\p{Cf}]/gu, " ").slice(0, 80);
 }
 
 async function main(): Promise<void> {
@@ -52,6 +47,8 @@ async function main(): Promise<void> {
   // (ChatGPT, Claude Desktop web connectors) need this on.
   const allowKeyInQuery =
     (process.env.MCP_ALLOW_KEY_IN_QUERY ?? "false").toLowerCase() === "true";
+  // Diagnostic for issue #18 — see describeRequestHeaders().
+  const logHeaders = (process.env.MCP_LOG_HEADERS ?? "false").toLowerCase() === "true";
 
   const keySources = await checkKeySources(pool, mcpAccessKey);
   if (!keySources.usable) {
@@ -129,7 +126,13 @@ async function main(): Promise<void> {
         : url.searchParams.has("key")
           ? "query"
           : "none";
-      const client = safeUserAgent(req.headers["user-agent"]);
+      const client = safeLogValue(req.headers["user-agent"]);
+
+      if (logHeaders) {
+        console.log(
+          `[mcp] /sse headers ${describeRequestHeaders(req.headers, req.socket.remoteAddress)}`
+        );
+      }
 
       if (!allowKeyInQuery && keySource === "query") {
         console.warn(
