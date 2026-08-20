@@ -86,7 +86,8 @@ Steps — follow exactly, don't skip:
    - curl http://localhost:8080/health → must also be healthy
    - If available, run: scripts/verify.ps1 http://localhost:8000  (or scripts/verify.sh)
 
-7. Configure the AI client I chose, using http://localhost:8080/sse?key=<MCP_KEY>.
+7. Configure the AI client I chose against http://localhost:8080/sse, sending the key
+   as the x-brain-key header (the ?key= URL form is off unless MCP_ALLOW_KEY_IN_QUERY=true).
    Use the exact config snippets from README "Client Configuration".
 
 8. Show me a summary: MCP URL (key masked), what's running, and a sample first prompt
@@ -176,7 +177,7 @@ Step 2 — Fly.io MCP server:
 
 Step 3 — AI client config:
   - Ask which client (VS Code Copilot / Claude Desktop / Claude Code / Skip).
-  - Configure it with https://<fly-url>/sse?key=<MCP_KEY>.
+  - Configure it with https://<fly-url>/sse and the x-brain-key header.
 
 Step 4 — End-to-end verification:
   - Run scripts/verify.sh https://<fly-url>  (or scripts/verify.ps1 on Windows).

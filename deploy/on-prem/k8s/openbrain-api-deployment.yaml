@@ -75,11 +75,17 @@ spec:
           value: "ollama"
 
         # MCP Authentication
+        # Shared fallback key. Per-client keys live in the access_keys table —
+        # mint them with `npm run key -- mint --label <name>`.
         - name: MCP_ACCESS_KEY
           valueFrom:
             secretKeyRef:
               name: openbrain-secrets
               key: mcp-access-key
+        # Only for clients that cannot send the x-brain-key header — the URL form
+        # puts the key into every access and proxy log.
+        - name: MCP_ALLOW_KEY_IN_QUERY
+          value: "false"
 
         # Application
         - name: API_HOST

@@ -236,11 +236,11 @@ kubectl patch svc openbrain-api -n openbrain \
 > the tailnet and the public internet — which removes the need for clients to
 > switch endpoints depending on where they are.
 >
-> ⚠ It is a **public internet** endpoint. Confirm the MCP server is guarded
-> first: the key check is skipped entirely when `MCP_ACCESS_KEY` is empty,
-> because the code reads `if (mcpAccessKey && key !== mcpAccessKey)`.
-> `/sse` must return **401** without a key. `/health` is unauthenticated by
-> design and returns only a status string.
+> ⚠ It is a **public internet** endpoint. Since 0.8.0 the server refuses to boot
+> with no key configured (no rows in `access_keys` and no `MCP_ACCESS_KEY`), so
+> it cannot silently become an open memory store. Still confirm `/sse` returns
+> **401** without a key. `/health` is unauthenticated by design and returns only
+> a status string.
 
 ### Step 5: Wait and Verify
 

@@ -16,10 +16,18 @@
 import http from "node:http";
 import { serve } from "@hono/node-server";
 
-import { initializeDatabase, closePool } from "./db/connection.js";
+import { initializeDatabase, closePool, getPool } from "./db/connection.js";
 import { createApi } from "./api/routes.js";
 import { createMcpServer } from "./mcp/server.js";
+import { authenticateAccessKey, checkKeySources } from "./auth/accessKeys.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+
+/** An SSE session plus the identity of the key that opened it. */
+interface McpSession {
+  transport: SSEServerTransport;
+  keyId: string | null;
+  keyLabel: string;
+}
 
 async function main(): Promise<void> {
   console.log("╔══════════════════════════════════════════╗");
@@ -29,6 +37,32 @@ async function main(): Promise<void> {
 
   // Initialize database connection pool
   await initializeDatabase();
+
+  const pool = getPool();
+  const mcpAccessKey = process.env.MCP_ACCESS_KEY ?? "";
+  // The key is accepted in the URL only when explicitly opted in: query strings land
+  // in access logs, proxy logs and browser history. Clients that cannot set headers
+  // (ChatGPT, Claude Desktop web connectors) need this on.
+  const allowKeyInQuery =
+    (process.env.MCP_ALLOW_KEY_IN_QUERY ?? "false").toLowerCase() === "true";
+
+  const keySources = await checkKeySources(pool, mcpAccessKey);
+  if (!keySources.usable) {
+    console.error("[auth] Refusing to start: no access keys configured.");
+    console.error("[auth]   The MCP endpoint is reachable by anyone who can route to it,");
+    console.error("[auth]   so serving with no key would make it an open memory store.");
+    console.error("[auth]   Fix with either:");
+    console.error("[auth]     • npm run key -- mint --label <name>   (named key, preferred)");
+    console.error("[auth]     • MCP_ACCESS_KEY=<64-char hex>          (shared fallback)");
+    await closePool();
+    process.exit(1);
+  }
+  console.log(
+    `[auth] ${keySources.namedKeys} named key(s); MCP_ACCESS_KEY fallback ${keySources.hasLegacyKey ? "enabled" : "not set"}.`
+  );
+  if (allowKeyInQuery) {
+    console.warn("[auth] MCP_ALLOW_KEY_IN_QUERY=true — keys in ?key= are logged by proxies.");
+  }
 
   // ── REST API Server (Hono) ──────────────────────────────────────
 
@@ -50,10 +84,9 @@ async function main(): Promise<void> {
   // ── MCP Server (SSE over raw Node.js HTTP) ─────────────────────
 
   const mcpPort = parseInt(process.env.MCP_PORT ?? "8080", 10);
-  const mcpAccessKey = process.env.MCP_ACCESS_KEY ?? "";
 
   // Track active SSE transports for cleanup
-  const transports = new Map<string, SSEServerTransport>();
+  const sessions = new Map<string, McpSession>();
 
   const mcpHttpServer = http.createServer(async (req, res) => {
     // CORS headers
@@ -80,36 +113,66 @@ async function main(): Promise<void> {
     // Auth is checked here; /messages skips the key check because
     // having a valid sessionId proves the client already authenticated.
     if (url.pathname === "/sse" && req.method === "GET") {
-      const key =
-        (req.headers["x-brain-key"] as string | undefined) ??
-        url.searchParams.get("key");
-      if (mcpAccessKey && key !== mcpAccessKey) {
-        res.writeHead(401, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Unauthorized" }));
+      const queryKey = allowKeyInQuery ? url.searchParams.get("key") : null;
+      const key = (req.headers["x-brain-key"] as string | undefined) ?? queryKey;
+
+      if (!allowKeyInQuery && !key && url.searchParams.has("key")) {
+        console.warn(
+          "[mcp] /sse denied: key supplied as ?key= but MCP_ALLOW_KEY_IN_QUERY is off"
+        );
+      }
+
+      const auth = await authenticateAccessKey(pool, key, {
+        legacyKey: mcpAccessKey,
+      }).catch((err: unknown) => {
+        // A key lookup that cannot run is not permission to skip it.
+        console.error(
+          "[mcp] /sse denied: access key lookup failed —",
+          err instanceof Error ? err.message : String(err)
+        );
+        return { ok: false as const, reason: "unavailable" as const };
+      });
+
+      if (!auth.ok) {
+        console.warn(`[mcp] /sse denied (${auth.reason})`);
+        res.writeHead(auth.reason === "unavailable" ? 503 : 401, {
+          "Content-Type": "application/json",
+        });
+        res.end(
+          JSON.stringify({
+            error: auth.reason === "unavailable" ? "Unavailable" : "Unauthorized",
+          })
+        );
         return;
       }
 
       const transport = new SSEServerTransport("/messages", res);
       const sessionId = transport.sessionId;
-      transports.set(sessionId, transport);
+      sessions.set(sessionId, {
+        transport,
+        keyId: auth.keyId,
+        keyLabel: auth.label,
+      });
 
       res.on("close", () => {
-        transports.delete(sessionId);
+        sessions.delete(sessionId);
         console.log(`[mcp] SSE session ${sessionId} closed`);
       });
 
       const server = createMcpServer();
       await server.connect(transport);
-      console.log(`[mcp] SSE session ${sessionId} connected`);
+      console.log(
+        `[mcp] SSE session ${sessionId} connected (key: ${auth.label}${auth.keyId ? ` / ${auth.keyId}` : ""})`
+      );
       return;
     }
 
     // Messages endpoint — receives JSON-RPC calls from AI clients
     if (url.pathname === "/messages" && req.method === "POST") {
       const sessionId = url.searchParams.get("sessionId");
-      const transport = sessionId ? transports.get(sessionId) : undefined;
+      const session = sessionId ? sessions.get(sessionId) : undefined;
 
-      if (!transport) {
+      if (!session) {
         res.writeHead(400, { "Content-Type": "application/json" });
         res.end(
           JSON.stringify({ error: "No active session. Connect to /sse first." })
@@ -117,7 +180,7 @@ async function main(): Promise<void> {
         return;
       }
 
-      await transport.handlePostMessage(req, res);
+      await session.transport.handlePostMessage(req, res);
       return;
     }
 
@@ -133,7 +196,10 @@ async function main(): Promise<void> {
     console.log(`[mcp]   GET  /health             — health check`);
     console.log("");
     console.log("[mcp] Connect AI clients to:");
-    console.log(`[mcp]   http://<host>:${mcpPort}/sse?key=<MCP_ACCESS_KEY>`);
+    console.log(`[mcp]   http://<host>:${mcpPort}/sse   header: x-brain-key: <KEY>`);
+    if (allowKeyInQuery) {
+      console.log(`[mcp]   http://<host>:${mcpPort}/sse?key=<KEY>   (header-less clients)`);
+    }
   });
 }
 

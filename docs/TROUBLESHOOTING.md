@@ -198,8 +198,34 @@ npx -y mcp-remote http://localhost:8080/sse?key=YOUR_KEY
 
 Should connect and print SSE events. If it errors:
 - Wrong port (use `8080` for MCP, not `8000` for REST)
-- Wrong key (must match `MCP_ACCESS_KEY` in your `.env` exactly)
+- Wrong key (must match a key in `access_keys`, or `MCP_ACCESS_KEY` in your `.env`, exactly)
+- The URL form needs `MCP_ALLOW_KEY_IN_QUERY=true` on the server — see below
 - For hosted: missing `https://`
+
+### `/sse` returns 401 after upgrading to 0.8.0
+
+Two causes, both deliberate:
+
+- **Key in the URL.** `?key=` is off by default now — query strings are recorded by
+  access logs, proxy logs and browser history. Move the key to the `x-brain-key`
+  header, or set `MCP_ALLOW_KEY_IN_QUERY=true` for clients that cannot send headers.
+  The server logs `key supplied as ?key= but MCP_ALLOW_KEY_IN_QUERY is off`.
+- **The key was revoked or expired.** The server logs the reason —
+  `[mcp] /sse denied (revoked)` or `(expired)`. Check with `npm run key -- list`.
+  A key cannot be un-revoked or re-read; mint a replacement.
+
+### Server exits at boot with "Refusing to start: no access keys configured"
+
+There is no usable row in `access_keys` **and** `MCP_ACCESS_KEY` is empty. Earlier
+versions would have served every request unauthenticated in this state. Fix with
+either `npm run key -- mint --label <name>` or by restoring `MCP_ACCESS_KEY`.
+
+If you expected named keys to be there, confirm the migration ran:
+
+```bash
+docker exec -i openbrain-postgres psql -U openbrain -d openbrain \
+  -c "SELECT label, revoked_at, expires_at FROM access_keys"
+```
 
 **Tip:** Claude Desktop overwrites `claude_desktop_config.json` on every launch. Edit the file **while Claude is closed**, save, then start Claude.
 

@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-08-19
+
+### Added
+- Named access keys (migration `004-add-access-keys.sql`): `access_keys` table storing
+  a SHA-256 hash per key with `label`, `last_used_at`, `revoked_at` and `expires_at`.
+  Each client gets its own key, revocable without rotating everyone else's.
+- `npm run key` CLI — `mint`, `seed-legacy`, `list`, `revoke`. A minted key is printed
+  once and only its hash is stored, so it can never be re-read.
+- Per-key session attribution: `/sse` resolves the key to its row id and carries it on
+  the session record, and connects are logged with the key label.
+- `MCP_ALLOW_KEY_IN_QUERY` (default `false`) to opt into the `?key=` URL form.
+
+### Fixed
+- **Auth no longer fails open.** `if (mcpAccessKey && key !== mcpAccessKey)` allowed
+  *every* request when `MCP_ACCESS_KEY` was unset, silently turning a public endpoint
+  into an open read/write memory store. The server now refuses to start when neither a
+  usable `access_keys` row nor `MCP_ACCESS_KEY` is configured.
+
+### Changed
+- **Breaking:** the key is no longer accepted as `?key=` in the URL unless
+  `MCP_ALLOW_KEY_IN_QUERY=true`. Query strings land in access logs, proxy logs and
+  browser history. Clients that can send `x-brain-key` should; ChatGPT and Claude
+  Desktop connectors need the flag.
+- `MCP_ACCESS_KEY` still authenticates as a fallback when no `access_keys` row matches,
+  so existing deployments upgrade without a key swap. Run `npm run key -- seed-legacy`
+  to fold it into the table.
+
 ## [0.7.4] - 2026-05-18
 
 ### Added

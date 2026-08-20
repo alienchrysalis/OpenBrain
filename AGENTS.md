@@ -24,7 +24,7 @@ There are **five canonical paths**. Pick one by interviewing the user — do not
 
 1. **Detect** existing state — is the repo cloned? Is `.env` present? Are containers running? Don't redo work.
 2. **Verify prerequisites** for the chosen path before generating anything.
-3. **Generate secrets, never reuse them.** `MCP_ACCESS_KEY` and `DB_PASSWORD` must be fresh per install. Use `openssl rand -hex 32` (Linux/Mac) or the PowerShell equivalent in `setup.ps1`. **Never** print these to chat output in full — mask after the first 8 chars when showing the user.
+3. **Generate secrets, never reuse them.** `MCP_ACCESS_KEY` and `DB_PASSWORD` must be fresh per install. Use `openssl rand -hex 32` (Linux/Mac) or the PowerShell equivalent in `setup.ps1`. **Never** print these to chat output in full — mask after the first 8 chars when showing the user. Once the stack is up, prefer per-client named keys: `npm run key -- mint --label <name>`. The server refuses to boot with no key configured, and `?key=` in the URL needs `MCP_ALLOW_KEY_IN_QUERY=true`.
 4. **Apply migrations in order** — `db/init.sql` first, then everything in `db/migrations/` sorted alphanumerically. Don't skip the `.down.sql` files (they're rollbacks; don't apply them on a fresh install).
 5. **Match `EMBEDDING_DIMENSIONS` to the embedder**:
    - Ollama `nomic-embed-text` → **768**

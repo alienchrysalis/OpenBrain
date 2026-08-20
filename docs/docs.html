@@ -60,6 +60,7 @@
                 <div class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 mt-6">Core</div>
                 <a href="#database" class="sidebar-link block py-1.5 px-3 rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-50 border-l-2 border-transparent">Database Schema</a>
                 <a href="#mcp-server" class="sidebar-link block py-1.5 px-3 rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-50 border-l-2 border-transparent">MCP Server</a>
+                <a href="#access-keys" class="sidebar-link block py-1.5 px-3 rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-50 border-l-2 border-transparent">🔑 Access Keys</a>
                 <a href="#capture" class="sidebar-link block py-1.5 px-3 rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-50 border-l-2 border-transparent">Capture Pipeline</a>
                 <a href="#prompts" class="sidebar-link block py-1.5 px-3 rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-50 border-l-2 border-transparent">Prompt Kit</a>
 
@@ -149,7 +150,7 @@
 
                 <pre><code>AI Client (Copilot, Claude, ChatGPT, Cursor, etc.)
     ↓ MCP Protocol (SSE transport)
-    ↓ Auth: x-brain-key header or ?key= param
+    ↓ Auth: x-brain-key header → access_keys lookup (hashed, revocable)
     ↓
 MCP Server (Node.js + Hono / Deno Edge Function)
     ├─ Tool dispatch (7 MCP tools)
@@ -159,6 +160,7 @@ MCP Server (Node.js + Hono / Deno Edge Function)
     ↓
 PostgreSQL + pgvector
     ├─ thoughts table (content + embedding + metadata)
+    ├─ access_keys table (SHA-256 hashes, per-client)
     ├─ HNSW index (vector search)
     ├─ GIN index (metadata filtering)
     └─ match_thoughts() RPC function</code></pre>
@@ -259,6 +261,27 @@ PostgreSQL + pgvector
     project_filter   := NULL,
     include_archived := false
 );</code></pre>
+
+                <h3 class="text-lg font-semibold mt-8 mb-3">
+                    The <code>access_keys</code> Table
+                    <span class="text-xs font-medium text-white bg-brand-600 px-2 py-0.5 rounded ml-2 align-middle">v0.8.0+</span>
+                </h3>
+                <p class="text-gray-600 text-sm mb-4">
+                    Migration <code>004-add-access-keys.sql</code> adds one key per client. Only the hash is stored — see <a href="#access-keys" class="text-brand-600 hover:underline">Access Keys</a>.
+                </p>
+                <table>
+                    <thead><tr><th>Column</th><th>Type</th><th>Purpose</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>id</code></td><td>UUID</td><td>Primary key</td></tr>
+                        <tr><td><code>label</code></td><td>TEXT</td><td>Who or what it is for — <code>toby-laptop</code>, <code>ci-rummag</code></td></tr>
+                        <tr><td><code>key_hash</code></td><td>TEXT UNIQUE</td><td>SHA-256 hex of the key. The key itself is never stored</td></tr>
+                        <tr><td><code>created_at</code></td><td>TIMESTAMPTZ</td><td>When minted</td></tr>
+                        <tr><td><code>last_used_at</code></td><td>TIMESTAMPTZ</td><td>Stamped on every successful handshake — makes stale keys visible</td></tr>
+                        <tr><td><code>revoked_at</code></td><td>TIMESTAMPTZ</td><td>Revoke by setting it; rows are never deleted, so the audit trail survives</td></tr>
+                        <tr><td><code>expires_at</code></td><td>TIMESTAMPTZ</td><td>Optional expiry</td></tr>
+                    </tbody>
+                </table>
+                <p class="text-gray-500 text-sm mt-4">Plain SHA-256 is deliberate: a key is 32 random bytes, so there is no dictionary to run and no human-chosen password to stretch. Hashing exists so a database dump does not leak live keys — bcrypt/argon2 would buy nothing here.</p>
             </section>
 
             <!-- MCP Server -->
@@ -319,11 +342,73 @@ PostgreSQL + pgvector
                 </div>
 
                 <h3 class="text-lg font-semibold mt-8 mb-3">Authentication</h3>
-                <p class="text-gray-600 text-sm mb-4">API key sent via <code>x-brain-key</code> header (preferred) or <code>?key=</code> URL parameter.</p>
+                <p class="text-gray-600 text-sm mb-4">The key goes in the <code>x-brain-key</code> header. Each client gets its own key from the <a href="#access-keys" class="text-brand-600 hover:underline">access_keys</a> table, so any one of them can be revoked on its own.</p>
                 <pre><code># Auth is enforced on /sse connection only.
 # /messages endpoint uses sessionId for implicit auth.
-GET /sse?key=YOUR_64_CHAR_HEX_KEY     → SSE stream
-POST /messages?sessionId=xxx           → JSON-RPC calls (no key needed)</code></pre>
+GET /sse            x-brain-key: YOUR_64_CHAR_HEX_KEY   → SSE stream
+POST /messages?sessionId=xxx                            → JSON-RPC calls (no key needed)
+GET /health                                             → unauthenticated by design</code></pre>
+                <div class="p-4 rounded-lg border border-amber-200 bg-amber-50/50 text-sm mt-4">
+                    <strong>The <code>?key=</code> URL form is off by default (v0.8.0+).</strong> Query strings are recorded by access logs, proxy logs and browser history. Clients that cannot send headers — ChatGPT connectors, Claude Desktop — need <code>MCP_ALLOW_KEY_IN_QUERY=true</code> on the server.
+                </div>
+            </section>
+
+            <!-- Access Keys -->
+            <section id="access-keys" class="mb-20">
+                <h2 class="text-2xl font-bold mb-4">
+                    🔑 Access Keys
+                    <span class="text-xs font-medium text-white bg-brand-600 px-2 py-0.5 rounded ml-2 align-middle">v0.8.0+</span>
+                </h2>
+                <p class="text-gray-600 leading-relaxed mb-6">One shared key means onboarding a teammate hands them <em>the</em> key, and removing them means rotating for everyone. Named keys fix that: every client, laptop and CI runner gets its own, revocable on its own, with an optional expiry date.</p>
+
+                <div class="grid md:grid-cols-3 gap-4 mb-8">
+                    <div class="p-4 rounded-lg border border-gray-100">
+                        <h4 class="font-semibold text-sm mb-1">Revoke one, not all</h4>
+                        <p class="text-sm text-gray-500">Stamping <code>revoked_at</code> kills a single key. Every other client keeps working — no rotation, no redistribution.</p>
+                    </div>
+                    <div class="p-4 rounded-lg border border-gray-100">
+                        <h4 class="font-semibold text-sm mb-1">Hashes, never keys</h4>
+                        <p class="text-sm text-gray-500">Only the SHA-256 hash is stored, so a database dump does not hand over live keys. A key is printed once and can never be re-read.</p>
+                    </div>
+                    <div class="p-4 rounded-lg border border-gray-100">
+                        <h4 class="font-semibold text-sm mb-1">Expiry &amp; last use</h4>
+                        <p class="text-sm text-gray-500">Hand a contractor a key that dies on a date. <code>last_used_at</code> makes stale keys visible at a glance.</p>
+                    </div>
+                </div>
+
+                <h3 class="text-lg font-semibold mt-8 mb-3">Managing keys</h3>
+                <pre><code># Mint a key — printed once, only its hash is stored
+npm run key -- mint --label toby-laptop
+npm run key -- mint --label ci-rummag --expires 2026-12-31
+
+# Who has one, when they last used it, what's revoked (no key material shown)
+npm run key -- list
+
+# Revoke — stamps revoked_at, keeps the audit row
+npm run key -- revoke --id &lt;uuid&gt;</code></pre>
+                <p class="text-gray-600 text-sm mt-4">Give the printed key to the client as the <code>x-brain-key</code> header. Requires migration <code>db/migrations/004-add-access-keys.sql</code>.</p>
+
+                <h3 class="text-lg font-semibold mt-8 mb-3">Upgrading from a shared <code>MCP_ACCESS_KEY</code></h3>
+                <p class="text-gray-600 text-sm mb-4">Nothing breaks. <code>MCP_ACCESS_KEY</code> still authenticates as a fallback when no named key matches, so existing deployments upgrade without touching a single client config. Fold it into the table when you're ready:</p>
+                <pre><code># Stores its hash as "legacy-shared" — the key itself is unchanged and never printed
+npm run key -- seed-legacy</code></pre>
+
+                <h3 class="text-lg font-semibold mt-8 mb-3">Two hardening changes shipped alongside</h3>
+                <div class="space-y-4">
+                    <div class="p-4 rounded-lg border border-gray-100">
+                        <h4 class="font-semibold text-sm mb-1">Auth no longer fails open</h4>
+                        <p class="text-sm text-gray-500">The old check was <code>if (mcpAccessKey &amp;&amp; key !== mcpAccessKey)</code> — with the env var unset it short-circuited and <strong>allowed every request</strong>. A server that lost its key silently became an open read/write memory store. It now refuses to start when there is neither a usable <code>access_keys</code> row nor <code>MCP_ACCESS_KEY</code>.</p>
+                    </div>
+                    <div class="p-4 rounded-lg border border-gray-100">
+                        <h4 class="font-semibold text-sm mb-1">The key is no longer accepted in the URL by default</h4>
+                        <p class="text-sm text-gray-500">Query strings land in access logs, proxy logs, shell history and browser history. Use the <code>x-brain-key</code> header; set <code>MCP_ALLOW_KEY_IN_QUERY=true</code> only for clients that cannot send one.</p>
+                    </div>
+                </div>
+
+                <h3 class="text-lg font-semibold mt-8 mb-3">Attribution</h3>
+                <p class="text-gray-600 text-sm">The key is checked only on the <code>/sse</code> handshake — <code>/messages</code> skips it because a valid <code>sessionId</code> already proves authentication. So identity is resolved once, at handshake, and carried on the session:</p>
+                <pre><code>[mcp] SSE session 2029e964-… connected (key: toby-laptop / e530461b-…)
+[mcp] /sse denied (revoked)</code></pre>
             </section>
 
             <!-- Capture Pipeline -->
@@ -746,6 +831,10 @@ cd OpenBrain
                 <h2 class="text-2xl font-bold mb-4">Client Configuration</h2>
                 <p class="text-gray-600 leading-relaxed mb-6">Copy-paste configs for every supported AI client.</p>
 
+                <div class="p-4 rounded-lg border border-amber-200 bg-amber-50/50 text-sm mb-6">
+                    <strong>Prefer the <code>x-brain-key</code> header.</strong> Since v0.8.0 the <code>?key=</code> URL form is rejected unless the server sets <code>MCP_ALLOW_KEY_IN_QUERY=true</code> — query strings are recorded by access logs, proxy logs and browser history. Mint a key per client with <code>npm run key -- mint --label &lt;name&gt;</code>.
+                </div>
+
                 <h3 class="text-lg font-semibold mt-8 mb-3">Claude Desktop</h3>
                 <p class="text-sm text-gray-500 mb-2">Requires <code>mcp-remote</code> bridge (Claude Desktop doesn't support SSE natively).</p>
                 <p class="text-xs text-gray-400 mb-3">File: <code>%APPDATA%\Claude\claude_desktop_config.json</code> (Windows) or <code>~/Library/Application Support/Claude/claude_desktop_config.json</code> (macOS)</p>
@@ -753,7 +842,8 @@ cd OpenBrain
   "mcpServers": {
     "openbrain": {
       "command": "npx",
-      "args": ["-y", "mcp-remote", "https://YOUR_HOST/sse?key=YOUR_KEY"]
+      "args": ["-y", "mcp-remote", "https://YOUR_HOST/sse",
+               "--header", "x-brain-key:YOUR_KEY"]
     }
   }
 }</code></pre>
@@ -764,7 +854,8 @@ cd OpenBrain
   "mcpServers": {
     "openbrain": {
       "type": "sse",
-      "url": "http://YOUR_HOST:8080/sse?key=YOUR_KEY"
+      "url": "http://YOUR_HOST:8080/sse",
+      "headers": { "x-brain-key": "YOUR_KEY" }
     }
   }
 }</code></pre>
@@ -774,14 +865,15 @@ cd OpenBrain
                 <pre><code>{
   "mcpServers": {
     "openbrain": {
-      "url": "http://YOUR_HOST:8080/sse?key=YOUR_KEY",
-      "transport": "sse"
+      "url": "http://YOUR_HOST:8080/sse",
+      "transport": "sse",
+      "headers": { "x-brain-key": "YOUR_KEY" }
     }
   }
 }</code></pre>
 
                 <h3 class="text-lg font-semibold mt-8 mb-3">ChatGPT</h3>
-                <p class="text-sm text-gray-500">Enable Developer Mode → Add MCP connector with your Funnel/public URL. Set auth to "none" (key in URL).</p>
+                <p class="text-sm text-gray-500">Enable Developer Mode → Add MCP connector with your Funnel/public URL. ChatGPT cannot send custom headers, so the key goes in the URL as <code>?key=</code> — that requires <code>MCP_ALLOW_KEY_IN_QUERY=true</code> on the server. Give it its own named key so it can be revoked independently.</p>
             </section>
 
             <!-- REST API -->
@@ -862,6 +954,17 @@ cd OpenBrain
                 <h3 class="text-lg font-semibold mt-2 mb-3">Common gotchas</h3>
 
                 <div class="space-y-6">
+                    <div class="p-4 rounded-lg border border-gray-100">
+                        <h4 class="font-semibold text-sm mb-2"><code>/sse</code> returns 401 after upgrading to v0.8.0</h4>
+                        <p class="text-sm text-gray-500 mb-2"><strong>Cause:</strong> the key is in the URL. <code>?key=</code> is off by default now. The server logs <code>key supplied as ?key= but MCP_ALLOW_KEY_IN_QUERY is off</code>.</p>
+                        <p class="text-sm text-gray-500 mb-2"><strong>Fix:</strong> move the key to the <code>x-brain-key</code> header, or set <code>MCP_ALLOW_KEY_IN_QUERY=true</code> for clients that cannot send one.</p>
+                        <p class="text-sm text-gray-500"><strong>Or:</strong> the key was revoked or expired — the server logs <code>/sse denied (revoked)</code> / <code>(expired)</code>. Check <code>npm run key -- list</code>; keys cannot be un-revoked, mint a replacement.</p>
+                    </div>
+                    <div class="p-4 rounded-lg border border-gray-100">
+                        <h4 class="font-semibold text-sm mb-2">"Refusing to start: no access keys configured"</h4>
+                        <p class="text-sm text-gray-500 mb-2"><strong>Cause:</strong> no usable row in <code>access_keys</code> <em>and</em> <code>MCP_ACCESS_KEY</code> is empty. Earlier versions served every request unauthenticated in this state — refusing is the fix.</p>
+                        <p class="text-sm text-gray-500"><strong>Fix:</strong> <code>npm run key -- mint --label &lt;name&gt;</code>, or restore <code>MCP_ACCESS_KEY</code>. If you expected named keys to exist, confirm migration <code>004-add-access-keys.sql</code> ran.</p>
+                    </div>
                     <div class="p-4 rounded-lg border border-gray-100">
                         <h4 class="font-semibold text-sm mb-2">"No active session. Connect to /sse first."</h4>
                         <p class="text-sm text-gray-500 mb-2"><strong>Cause:</strong> SSE connection and <code>/messages</code> POST hitting different pods (multi-replica without session affinity).</p>

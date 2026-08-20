@@ -7,9 +7,9 @@
 # endpoint with no TLS termination. Only an Ingress with
 # ingressClassName: tailscale produces a real Funnel.
 #
-# This is a PUBLIC INTERNET endpoint. Before applying it, confirm the MCP server
-# is actually guarded — the key check is skipped entirely when MCP_ACCESS_KEY is
-# empty, because the code reads `if (mcpAccessKey && key !== mcpAccessKey)`:
+# This is a PUBLIC INTERNET endpoint. Since 0.8.0 the server refuses to boot when
+# no key is configured — no usable row in `access_keys` and no MCP_ACCESS_KEY — so
+# it cannot silently degrade into an open store. Confirm it anyway:
 #
 #   kubectl -n openbrain get secret openbrain-secrets -o jsonpath='{.data.mcp-access-key}'
 #   curl -s -o /dev/null -w '%{http_code}' http://<tailnet-host>:443/sse   # must be 401

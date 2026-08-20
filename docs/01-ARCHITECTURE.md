@@ -106,7 +106,7 @@ Any MCP-compatible AI tool can connect to Open Brain:
 | Cursor | MCP config in settings | Header |
 | Custom apps | HTTP to MCP endpoint | Header or URL param |
 
-**Important**: Claude Code and Cursor support custom headers (`x-brain-key`). Claude Desktop/Web and ChatGPT require the key embedded in the URL as a query parameter (`?key=`).
+**Important**: Claude Code and Cursor support custom headers (`x-brain-key`), which is the preferred form. Claude Desktop/Web and ChatGPT require the key embedded in the URL as a query parameter (`?key=`), which the server accepts only when `MCP_ALLOW_KEY_IN_QUERY=true`.
 
 ### 2. MCP Server (Edge Function: `open-brain-mcp`)
 
@@ -232,10 +232,13 @@ Single table design with rich JSONB metadata.
 ┌─────────────────────────────────────┐
 │           Security Layers           │
 ├─────────────────────────────────────┤
-│ 1. MCP_ACCESS_KEY (64-char hex)     │ ← Application layer auth
-│    - Checked via x-brain-key header │
-│    - OR via ?key= URL parameter     │
-│    - 401 on invalid/missing         │
+│ 1. Named access keys (64-char hex)   │ ← Application layer auth
+│    - SHA-256 hashes in access_keys   │
+│    - Checked via x-brain-key header  │
+│    - ?key= needs an explicit opt-in  │
+│    - Revocable + expirable per key   │
+│    - MCP_ACCESS_KEY is the fallback  │
+│    - 401 on invalid/missing          │
 ├─────────────────────────────────────┤
 │ 2. Supabase Service Role Key        │ ← Database access
 │    - Full CRUD on thoughts table    │
