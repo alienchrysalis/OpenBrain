@@ -58,9 +58,12 @@ jobs:
 
       # github.repository is srnichols/OpenBrain, and a Docker repository name must
       # be lowercase. Interpolating it directly failed every push for five months.
+      # The path mirrors the ACR repository (openbrain/api) and, unlike the bare
+      # `openbrain` package, is created by this workflow — so it is linked to this
+      # repo and GITHUB_TOKEN can write it.
       - name: Compute lowercase image name
         id: image
-        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/openbrain/api" >> "$GITHUB_OUTPUT"
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
