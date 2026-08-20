@@ -34,7 +34,7 @@ spec:
         # public, so no pull secret is needed for it. Tagged with the commit SHA
         # rather than :latest, so a pod's image says exactly which build it is and
         # a rollback is `kubectl rollout undo`.
-        image: ghcr.io/srnichols/openbrain/api:5b51ff60d5e6860a4eaf43c8eea1ce10c407fd66
+        image: ghcr.io/srnichols/openbrain/api:6dbc24e547eb6c42aee54f6620578a6365190f12
         imagePullPolicy: Always
         ports:
         - name: api
