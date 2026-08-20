@@ -162,10 +162,10 @@ kubectl get secret acr-pull-secret -n your-namespace -o yaml \
 
 ### Step 3a: Build and push the image, then substitute it
 
-`openbrain-api-deployment.yaml` ships a deliberate placeholder
-(`REPLACE-ME.azurecr.io/openbrain/api:REPLACE-ME`). Nothing builds it for you --
-CI publishes to GHCR, which is not where this manifest points -- so applying the
-file unedited gives `ImagePullBackOff`.
+`openbrain-api-deployment.yaml` pins a private ACR image that only this project's
+maintainer can pull. Nothing builds it for you — CI publishes to GHCR, which is not
+where this manifest points — so applying the file unedited gives `ImagePullBackOff`
+or `ErrImagePull`.
 
 ```bash
 TAG=$(date -u +%Y%m%d-%H%M%S)
@@ -175,7 +175,7 @@ az acr login --name "${REGISTRY%%.*}"
 docker build -t "$REGISTRY/openbrain/api:$TAG" .
 docker push "$REGISTRY/openbrain/api:$TAG"
 
-sed -i "s|REPLACE-ME.azurecr.io/openbrain/api:REPLACE-ME|$REGISTRY/openbrain/api:$TAG|" \
+sed -i "s|image: .*/openbrain/api:.*|image: $REGISTRY/openbrain/api:$TAG|" \
   deploy/on-prem/k8s/openbrain-api-deployment.yaml
 ```
 

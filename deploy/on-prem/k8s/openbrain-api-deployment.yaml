@@ -30,12 +30,12 @@ spec:
     spec:
       containers:
       - name: openbrain-api
-        # PLACEHOLDER -- this manifest will not run as-is. Build and push the image
-        # to your own registry first and substitute it here, or the pod lands in
-        # ImagePullBackOff. See docs/09-SELF-HOSTED-K8S.md, Step 3a.
-        # Applying this file unedited to a cluster that already runs OpenBrain
-        # will replace a working image with this one.
-        image: REPLACE-ME.azurecr.io/openbrain/api:REPLACE-ME
+        # This is the image this cluster actually runs. It lives in a private ACR,
+        # pulled via the acr-pull-secret below — substitute your own registry when
+        # adopting these manifests, or the pod lands in ImagePullBackOff.
+        # See docs/09-SELF-HOSTED-K8S.md, Step 3a.
+        # Deployed 2026-08-20 from commit 24d8ba2 (also tagged sha-24d8ba2 in ACR).
+        image: acrupickshared.azurecr.io/openbrain/api:20260820-043413
         imagePullPolicy: Always
         ports:
         - name: api
@@ -83,9 +83,11 @@ spec:
               name: openbrain-secrets
               key: mcp-access-key
         # Only for clients that cannot send the x-brain-key header — the URL form
-        # puts the key into every access and proxy log.
+        # puts the key into every access and proxy log. True here for backward
+        # compatibility with clients configured before 0.8.0; turning it off is a
+        # separate change, once request logging shows nobody depends on it.
         - name: MCP_ALLOW_KEY_IN_QUERY
-          value: "false"
+          value: "true"
 
         # Application
         - name: API_HOST
@@ -98,6 +100,10 @@ spec:
           value: "8080"
         - name: LOG_LEVEL
           value: "info"
+        # Set live but previously missing here, which meant this file could not
+        # reproduce the running deployment.
+        - name: OPENBRAIN_STRICT_INGEST
+          value: "true"
 
         # Optional: OpenRouter (if EMBEDDER_PROVIDER=openrouter)
         # - name: OPENROUTER_API_KEY
