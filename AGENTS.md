@@ -2,7 +2,7 @@
 
 > This file is read automatically by GitHub Copilot, Claude Code, Cursor, Aider, Devin, and other AI agents that look for `AGENTS.md` (the emerging cross-tool convention). If you're a human reader, you can safely ignore it — head to the [README](README.md) instead.
 
-You are an AI agent helping a user with Open Brain — a persistent semantic-memory backend for AI tools, built on **Node 22 + TypeScript + PostgreSQL + pgvector**, exposing **REST** (`:8000`) and **MCP-over-SSE** (`:8080`).
+You are an AI agent helping a user with Open Brain — a persistent semantic-memory backend for AI tools, built on **Node 22 + TypeScript + PostgreSQL + pgvector**, exposing **REST** (`:8000`) and **MCP** (`:8080`) over two transports: **Streamable HTTP** on `/mcp` (current spec, preferred) and **SSE** on `/sse` + `/messages` (2024-11-05 spec, kept for clients — e.g. Claude Desktop's built-in connector — that don't yet speak Streamable HTTP).
 
 ---
 
@@ -50,9 +50,9 @@ There are **five canonical paths**. Pick one by interviewing the user — do not
 2. Then consult [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for that layer.
 3. Common gotchas you'll see often:
    - Ollama on host + container can't reach it → fix is `host.docker.internal` not `localhost`.
-   - Multi-replica K8s + SSE drops → fix is `sessionAffinity: ClientIP`.
+   - Multi-replica K8s + session drops (either MCP transport) → fix is `sessionAffinity: ClientIP`. Both `/mcp` and `/sse` keep session state in-memory per pod, so a request that lands on a different replica than the one holding the session fails.
    - Supabase `prepared statement already exists` → fix is pooler URL (port 6543), not direct (5432).
-   - Claude Desktop "MCP server failed" → almost always wrong port (`8080` for MCP, not `8000`) or key mismatch.
+   - Claude Desktop "MCP server failed" → almost always wrong port (`8080` for MCP, not `8000`) or key mismatch. Claude Desktop's built-in connector only speaks SSE (`/sse`), not Streamable HTTP (`/mcp`).
    - `404` on `/memories/*` from outside the cluster → REST (port 8000) is **in-cluster only** by design; the Tailscale Funnel only exposes MCP on 8080. See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#network-exposure-which-ports-go-where).
    - External MCP client reports "0 failures" but rows are missing → the client is ignoring `res.isError` on tool responses. MCP returns tool-level errors inside a 200 envelope and silently treating them as success is a known footgun. Tell the client to check `isError` and propagate the server body.
 

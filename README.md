@@ -114,7 +114,7 @@ Open Brain runs anywhere Postgres + Node can run. Pick the path that matches *ho
 
 - 🤖 **[EASY-SETUP.md](EASY-SETUP.md)** — paste-into-your-AI prompts that automate the install for each path (including a "help me decide" prompt that picks for you).
 - ✅ **[`scripts/verify.{ps1,sh}`](scripts/)** — 60-second smoke test you can point at any deployment URL. Captures a test thought, searches for it, cleans up. Use it to confirm a fresh install or to debug a sick one.
-- 🚑 **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** — cross-cutting fixes: embedder unreachable, dimension mismatch, multi-replica SSE drops, Supabase pooler quirks, etc.
+- 🚑 **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** — cross-cutting fixes: embedder unreachable, dimension mismatch, multi-replica session drops (either MCP transport), Supabase pooler quirks, etc.
 - ⏱️ **[docs/13-FIRST-HOUR.md](docs/13-FIRST-HOUR.md)** — what to actually *do* once it's running: first captures, search patterns, building the habit.
 - 🧠 **[AGENTS.md](AGENTS.md)** — drop this file in your fork so any AI agent helping a user follows the canonical install procedure (read automatically by Copilot, Claude Code, Cursor, Aider, Devin).
 
@@ -175,7 +175,7 @@ docker compose up -d
 
 This starts:
 - **PostgreSQL 17 + pgvector** on port 5432
-- **Open Brain API** on port 8000 (REST) and port 8080 (MCP SSE)
+- **Open Brain API** on port 8000 (REST) and port 8080 (MCP — Streamable HTTP on `/mcp`, legacy SSE on `/sse`)
 
 ### 4. Verify
 
@@ -216,14 +216,17 @@ Add to your Claude Code settings (`~/.claude/settings.json`):
 {
   "mcpServers": {
     "openbrain": {
-      "type": "sse",
-      "url": "http://localhost:8080/sse?key=YOUR_MCP_ACCESS_KEY"
+      "type": "http",
+      "url": "http://localhost:8080/mcp",
+      "headers": { "x-brain-key": "YOUR_MCP_ACCESS_KEY" }
     }
   }
 }
 ```
 
 Restart Claude Code. You now have persistent memory across all sessions.
+
+> Older clients (e.g. Claude Desktop's built-in connector) don't yet speak Streamable HTTP — see [Client Configuration](#client-configuration) below for the `/sse` fallback.
 
 ---
 
@@ -581,11 +584,19 @@ The `created_by` parameter is fully optional — omit it and everything works ex
 
 ## Client Configuration
 
-> The examples below put the key in the URL. That form is **off by default** —
-> query strings land in access logs, proxy logs and browser history. Prefer the
-> `x-brain-key` header (Claude Code, Cursor, Windsurf and VS Code all support
-> `"headers"`). For clients that cannot send headers (ChatGPT, Claude Desktop
-> connectors), set `MCP_ALLOW_KEY_IN_QUERY=true` on the server.
+> Open Brain serves MCP over two transports on port 8080: **Streamable HTTP**
+> on `/mcp` (the current spec — one endpoint, prefer this whenever your client
+> supports it) and **SSE** on `/sse` + `/messages` (the older 2024-11-05 spec,
+> kept for clients that haven't caught up yet — notably Claude Desktop's
+> built-in connector). Both accept the same access key and both are verified
+> working; use whichever your client documents.
+>
+> The examples below put the key in the URL for clients without header
+> support. That form is **off by default** — query strings land in access
+> logs, proxy logs and browser history. Prefer the `x-brain-key` header
+> (Claude Code, Cursor, Windsurf and VS Code all support `"headers"`). For
+> clients that cannot send headers (ChatGPT, Claude Desktop connectors), set
+> `MCP_ALLOW_KEY_IN_QUERY=true` on the server.
 
 ### Claude Code
 
@@ -595,8 +606,9 @@ Add to `~/.claude/settings.json`:
 {
   "mcpServers": {
     "openbrain": {
-      "type": "sse",
-      "url": "http://<host>:8080/sse?key=<YOUR_MCP_ACCESS_KEY>"
+      "type": "http",
+      "url": "http://<host>:8080/mcp",
+      "headers": { "x-brain-key": "<YOUR_MCP_ACCESS_KEY>" }
     }
   }
 }
@@ -627,6 +639,8 @@ Add to `claude_desktop_config.json`:
 **Verify:** Fully quit Claude Desktop (system tray → Quit), relaunch, then ask: *"Use the thought_stats tool to show brain statistics."*
 
 > If your server is behind HTTPS (e.g., Tailscale Funnel), use the `https://` URL instead.
+>
+> `mcp-remote` bridges to either transport — point it at `.../sse` (shown above, matches Claude Desktop's own connector) or `.../mcp` for Streamable HTTP; it auto-detects which one the server speaks.
 
 ### Cursor
 
@@ -673,8 +687,9 @@ Create `.vscode/mcp.json` in your project root:
 {
   "servers": {
     "openbrain": {
-      "type": "sse",
-      "url": "http://<host>:8080/sse?key=<YOUR_MCP_ACCESS_KEY>"
+      "type": "http",
+      "url": "http://<host>:8080/mcp",
+      "headers": { "x-brain-key": "<YOUR_MCP_ACCESS_KEY>" }
     }
   }
 }
@@ -691,13 +706,16 @@ Open VS Code Settings (`Ctrl+,`), search for `mcp`, and edit `settings.json`:
   "mcp": {
     "servers": {
       "openbrain": {
-        "type": "sse",
-        "url": "http://<host>:8080/sse?key=<YOUR_MCP_ACCESS_KEY>"
+        "type": "http",
+        "url": "http://<host>:8080/mcp",
+        "headers": { "x-brain-key": "<YOUR_MCP_ACCESS_KEY>" }
       }
     }
   }
 }
 ```
+
+> Older VS Code versions only support `"type": "sse"` against `/sse?key=<KEY>` — use that form if `"http"` is rejected.
 
 #### Verify it works
 
@@ -800,18 +818,20 @@ curl -X POST http://<host>:8000/memories/search \
 
 ### Any Other MCP Client
 
-Open Brain works with any client that supports the MCP SSE transport:
+Open Brain works with any client that supports either MCP HTTP transport:
 
 | Setting | Value |
 |---------|-------|
-| **URL** | `http://<host>:8080/sse?key=<YOUR_MCP_ACCESS_KEY>` |
+| **URL (preferred)** | `http://<host>:8080/mcp` |
+| **Transport** | Streamable HTTP |
+| **URL (legacy)** | `http://<host>:8080/sse?key=<YOUR_MCP_ACCESS_KEY>` |
 | **Transport** | SSE |
-| **Auth** | Key in URL (no separate auth header needed) |
+| **Auth** | `x-brain-key` header (preferred), or `?key=` in the URL if the client can't send headers and `MCP_ALLOW_KEY_IN_QUERY=true` is set |
 
-For clients that only support **stdio** transport, use `mcp-remote` as a bridge:
+For clients that only support **stdio** transport, use `mcp-remote` as a bridge — it auto-detects which transport the server speaks:
 
 ```bash
-npx mcp-remote http://<host>:8080/sse?key=<YOUR_MCP_ACCESS_KEY>
+npx mcp-remote http://<host>:8080/mcp
 ```
 
 For clients with **no MCP support**, use the REST API on port 8000 — every MCP tool has a REST equivalent.
@@ -836,7 +856,7 @@ For clients with **no MCP support**, use the REST API on port 8000 — every MCP
 | `MCP_ACCESS_KEY` | — | Shared bootstrap key (generate with `openssl rand -hex 32`). Prefer named keys — see [Access keys](#access-keys) |
 | `MCP_ALLOW_KEY_IN_QUERY` | `false` | Accept the key as `?key=` in the URL. Off by default — query strings are logged by proxies |
 | `API_PORT` | `8000` | REST API port |
-| `MCP_PORT` | `8080` | MCP SSE server port |
+| `MCP_PORT` | `8080` | MCP server port — serves both `/mcp` (Streamable HTTP) and `/sse` + `/messages` (legacy SSE) |
 | `LOG_LEVEL` | `info` | Logging level |
 
 ---
@@ -899,7 +919,7 @@ Open Brain runs two servers in a single process:
 | Server | Port | Transport | Purpose |
 |--------|------|-----------|---------|
 | REST API (Hono) | 8000 | HTTP/JSON | Direct access, webhooks, health checks |
-| MCP Server | 8080 | HTTP/SSE | AI client connections via Model Context Protocol |
+| MCP Server | 8080 | Streamable HTTP (`/mcp`) + SSE (`/sse`, `/messages`) | AI client connections via Model Context Protocol |
 
 ---
 
@@ -1102,7 +1122,7 @@ This implementation started from [Nate B Jones'](https://www.natebjones.com) Ope
 | **REST Framework** | Supabase routing | Hono |
 | **Embeddings** | OpenRouter (`text-embedding-3-small`, 1536-dim) | Ollama (`nomic-embed-text`, 768-dim) — free, local, private |
 | **Metadata LLM** | OpenRouter (`gpt-4o-mini`) | Ollama (`llama3.2`) — free, local |
-| **MCP Transport** | SSE via Edge Function | SSE via raw Node.js HTTP server |
+| **MCP Transport** | SSE via Edge Function | Streamable HTTP + SSE, both via raw Node.js HTTP server |
 | **Auth** | `?key=` URL param | `?key=` URL param + Kubernetes Secrets + Tailscale ACLs |
 
 ### Features Added (Dev-Ready Upgrade)
