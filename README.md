@@ -644,7 +644,20 @@ Add to `claude_desktop_config.json`:
 
 ### Cursor
 
-Add to `.cursor/mcp.json` in your project:
+Cursor (1.0+) speaks Streamable HTTP and auto-detects it from the URL — no `"transport"` field needed. Add to `.cursor/mcp.json` in your project:
+
+```json
+{
+  "mcpServers": {
+    "openbrain": {
+      "url": "http://<host>:8080/mcp",
+      "headers": { "x-brain-key": "<YOUR_MCP_ACCESS_KEY>" }
+    }
+  }
+}
+```
+
+If Cursor rejects it, fall back to the older explicit-SSE form, which is still fully supported:
 
 ```json
 {
@@ -667,11 +680,14 @@ Add to `~/.codeium/windsurf/mcp_config.json`:
 {
   "mcpServers": {
     "openbrain": {
-      "serverUrl": "http://<host>:8080/sse?key=<YOUR_MCP_ACCESS_KEY>"
+      "serverUrl": "http://<host>:8080/mcp",
+      "headers": { "x-brain-key": "<YOUR_MCP_ACCESS_KEY>" }
     }
   }
 }
 ```
+
+`serverUrl` + `headers` works for either transport — swap the path back to `/sse?key=<KEY>` (no headers needed) if your Windsurf version doesn't yet speak Streamable HTTP.
 
 **Verify:** Open Windsurf Cascade, then ask: *"Use the thought_stats tool to show brain statistics."*
 
@@ -745,11 +761,11 @@ Copilot calls `search_thoughts` with `project: "my-api"` and `type: "architectur
 
 ChatGPT supports MCP via **Connectors** in Developer Mode.
 
-1. Go to **Settings → Developer → MCP Connectors**
-2. Click **Add Connector**
-3. Set the URL: `http://<host>:8080/sse?key=<YOUR_MCP_ACCESS_KEY>`
-4. Transport: **SSE**
-5. Authentication: **None** (key is embedded in URL)
+1. Go to **Settings → Connectors → Advanced**, toggle on **Developer Mode**
+2. In a conversation, add a connector → **Custom** connector
+3. Set the URL: `http://<host>:8080/mcp?key=<YOUR_MCP_ACCESS_KEY>` (or `.../sse?key=<KEY>` if your ChatGPT version only offers the SSE transport option)
+4. Transport: **Streamable HTTP**
+5. Authentication: **None** (ChatGPT connectors can't send custom headers, so the key travels in the URL — requires `MCP_ALLOW_KEY_IN_QUERY=true` on the server, same as the SSE form always needed)
 6. Save and start a new conversation
 
 > **Note**: ChatGPT disables its built-in memory when Developer Mode is active. Open Brain replaces that functionality with project-scoped, searchable, persistent memory.
@@ -787,20 +803,33 @@ Invoke-RestMethod -Uri "http://<host>:8000/memories/search" -Method Post `
 
 ### Gemini
 
-Gemini supports MCP connectors:
+The consumer Gemini app (gemini.google.com) supports custom MCP servers as "connected apps":
 
-1. Go to **Settings → Extensions → MCP Tools**
-2. Add connector with URL: `http://<host>:8080/sse?key=<YOUR_MCP_ACCESS_KEY>`
-3. Transport: **SSE**
-4. Authentication: **None**
+1. In the Gemini web app, click **Settings & help → Connected Apps** (if you don't see it, go through **Personal Intelligence → Connected Apps** first)
+2. Add a custom app, entering the MCP server URL. This server doesn't use OAuth, so if Gemini asks for credentials rather than accepting an unauthenticated URL, use the key-in-URL form instead: `http://<host>:8080/mcp?key=<YOUR_MCP_ACCESS_KEY>` (requires `MCP_ALLOW_KEY_IN_QUERY=true` on the server — see the [Client Configuration](#client-configuration) note above on why that's off by default)
 
 > Gemini requires a publicly accessible URL. If self-hosted, use Tailscale Funnel or a public reverse proxy.
+>
+> The **Gemini CLI** (a separate product) configures MCP servers directly in `~/.gemini/settings.json` instead — add an entry under `mcpServers` with `"httpUrl": "http://<host>:8080/mcp"` and `"headers": {"x-brain-key": "<YOUR_MCP_ACCESS_KEY>"}`.
 
 **Verify:** Ask: *"Use the thought_stats tool to show my brain statistics."*
 
 ### Grok
 
-Grok does not yet support MCP natively. Use the **REST API** directly:
+Grok (grok.com, paid accounts) now supports MCP natively via Connectors:
+
+1. Go to **grok.com/connectors → New Connector → Custom**
+2. Set the URL: `http://<host>:8080/mcp`
+3. Transport: **Streamable HTTP**
+4. Complete authentication as prompted
+
+> Grok's connector must reach your server over the public internet — `localhost` and private LAN addresses (`192.168.x.x`, `10.x.x.x`) are rejected. Use Tailscale Funnel or a public reverse proxy if self-hosted.
+>
+> If your server is only reachable via a Cloudflare quick tunnel, use `/mcp` (Streamable HTTP) rather than `/sse` — Grok's docs note Cloudflare quick tunnels don't support the SSE transport.
+
+**Verify:** Ask: *"Use the thought_stats tool to show my brain statistics."*
+
+If you can't expose the server publicly, use the **REST API** directly instead:
 
 ```bash
 # Capture
@@ -813,8 +842,6 @@ curl -X POST http://<host>:8000/memories/search \
   -H "Content-Type: application/json" \
   -d '{"query": "input validation patterns", "project": "my-api"}'
 ```
-
-> **When MCP lands**: xAI has announced MCP support for Grok. When available, configure it the same way as ChatGPT using the SSE URL.
 
 ### Any Other MCP Client
 
