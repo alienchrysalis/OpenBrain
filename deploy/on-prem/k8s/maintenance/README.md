@@ -58,6 +58,32 @@ gunzip -c openbrain_<ts>.sql.gz | psql -U openbrain -d openbrain
 
 The dump is emitted with `--clean --if-exists`, so it will drop and recreate objects (including the `vector` extension) on the target.
 
+> ⚠ **Restore into a throwaway instance, never the live one, unless you mean it.**
+> `--clean --if-exists` drops objects in whatever database you point it at, so a
+> mistyped `-d` destroys the running brain.
+
+**Verified 2026-08-20** — the 02:00 UTC dump was replayed into a scratch
+`pgvector/pgvector:pg17` pod with the NAS mounted read-only. It restores and is
+functionally usable, not merely present:
+
+| Check | Result |
+|---|---|
+| `psql` exit code | 0 with `ON_ERROR_STOP=1` |
+| Rows | 2,393 of 2,394 live (the difference was captured after the dump) |
+| Indexes | 8, including the HNSW `idx_thoughts_embedding` |
+| `vector` extension | 0.8.6 |
+| `match_thoughts(...)` | returned 5 rows — semantic search works on restored data |
+
+Two things that test surfaced:
+
+- **A dump only contains the migrations that had run when it was taken.** The 02:00
+  dump predates `004-add-access-keys.sql`, so restoring it yields a database with no
+  `access_keys` table and no named keys. The server degrades to the `MCP_ACCESS_KEY`
+  fallback rather than failing, but every named key is gone. After applying a
+  migration, the first backup that includes it is the next scheduled run.
+- **Restore as the `openbrain` role.** Replaying as `postgres` leaves every object
+  owned by `postgres`, which the application does not expect.
+
 ## pgvector
 
 The image is `pgvector/pgvector:pg17`. Plain `pg_dump` emits `CREATE EXTENSION vector;` and the column data, so backups round-trip on any host with pgvector installed. HNSW/IVFFlat **REINDEX is not automated** — the weekly maintenance job reports vector index sizes so you can decide when to schedule a manual reindex.

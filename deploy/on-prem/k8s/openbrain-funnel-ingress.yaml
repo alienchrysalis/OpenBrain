@@ -1,0 +1,50 @@
+# Tailscale Funnel for the OpenBrain MCP server — the form that actually works.
+#
+# The sibling openbrain-tailscale-funnel.yaml is a LoadBalancer Service carrying
+# `tailscale.com/funnel: "true"`. The operator ignores that annotation on a
+# Service: it creates a tailnet device and DNATs the port, with no
+# `tailscale serve` config, and Funnel requires one. The result is a tailnet-only
+# endpoint with no TLS termination. Only an Ingress with
+# ingressClassName: tailscale produces a real Funnel.
+#
+# This is a PUBLIC INTERNET endpoint. Since 0.8.0 the server refuses to boot when
+# no key is configured — no usable row in `access_keys` and no MCP_ACCESS_KEY — so
+# it cannot silently degrade into an open store. Confirm it anyway:
+#
+#   kubectl -n openbrain get secret openbrain-secrets -o jsonpath='{.data.mcp-access-key}'
+#   curl -s -o /dev/null -w '%{http_code}' http://<tailnet-host>:443/sse   # must be 401
+#
+# Verified 2026-08-08: a 64-character key is set, and /sse returns 401 without
+# it. /health is deliberately unauthenticated and returns only a status string.
+# /messages skips the key check by design, but it requires a sessionId that can
+# only be obtained by authenticating to /sse first.
+#
+# Prerequisites, both already satisfied on this tailnet:
+#   1. `funnel` granted to tag:k8s in the tailnet policy nodeAttrs
+#   2. HTTPS certificates enabled (Admin Console -> DNS)
+#
+# The operator suffixes the hostname when the requested one is taken, and this
+# tailnet has stale duplicate devices holding `openbrain`. Read the name it
+# actually got rather than assuming:
+#
+#   kubectl -n openbrain get ingress openbrain-funnel-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: openbrain-funnel-ingress
+  namespace: openbrain
+  labels:
+    app: openbrain-api
+  annotations:
+    tailscale.com/funnel: "true"
+spec:
+  ingressClassName: tailscale
+  defaultBackend:
+    service:
+      name: openbrain-api
+      # The MCP listener. Funnel terminates TLS, so the backend stays plain HTTP.
+      port:
+        number: 8080
+  tls:
+    - hosts:
+        - openbrain-mcp

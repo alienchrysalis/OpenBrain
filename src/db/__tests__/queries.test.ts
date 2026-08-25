@@ -3,7 +3,7 @@
  * Uses mocked pg.Pool to test query construction and parameter passing.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import type pg from "pg";
 
 import {
@@ -326,7 +326,7 @@ describe("deleteThought", () => {
 
 describe("batchInsertThoughts", () => {
   it("inserts all thoughts within a transaction", async () => {
-    const { pool, mockQuery, mockConnect } = createMockPool();
+    const { pool, mockConnect } = createMockPool();
     const clientQuery = (await mockConnect()).query;
 
     const row = (i: number) => ({

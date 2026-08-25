@@ -160,6 +160,42 @@ kubectl get secret acr-pull-secret -n your-namespace -o yaml \
   | kubectl apply -f -
 ```
 
+### Step 3a: Pick an image
+
+`openbrain-api-deployment.yaml` points at the image CI publishes on every push to
+master:
+
+```
+ghcr.io/srnichols/openbrain/api:<commit-sha>
+```
+
+That package is public, so no pull secret is needed for it and the manifest works
+as-is. Commit-SHA tags rather than `:latest`, so a rollback is `kubectl rollout undo`
+and a running pod's image says which build it is.
+
+**Want your own build instead?** Any registry works — build, push, and substitute:
+
+```bash
+TAG=$(date -u +%Y%m%d-%H%M%S)
+REGISTRY=your-registry.azurecr.io          # the one whose pull secret you copied above
+
+az acr login --name "${REGISTRY%%.*}"
+docker build -t "$REGISTRY/openbrain/api:$TAG" .
+docker push "$REGISTRY/openbrain/api:$TAG"
+
+sed -i "s|image: .*/openbrain/api:.*|image: $REGISTRY/openbrain/api:$TAG|" \
+  deploy/on-prem/k8s/openbrain-api-deployment.yaml
+```
+
+**Upgrading an existing install?** Do not re-apply the whole manifest -- it would
+also overwrite any live tuning of replicas or resource limits. Just move the
+image:
+
+```bash
+kubectl -n openbrain set image deployment/openbrain-api openbrain-api="$REGISTRY/openbrain/api:$TAG"
+kubectl -n openbrain rollout status deployment/openbrain-api
+```
+
 ### Step 4: Apply Manifests
 
 Apply the Kubernetes resources in dependency order. The session affinity patch is critical — without it, MCP SSE connections can break when requests land on different pods.
@@ -172,12 +208,44 @@ kubectl apply -f k8s/postgres-statefulset.yaml
 kubectl apply -f k8s/openbrain-api-deployment.yaml
 kubectl apply -f k8s/openbrain-api-service-metallb.yaml
 kubectl apply -f k8s/openbrain-tailscale-service.yaml    # Tailscale MagicDNS (tailnet only)
-kubectl apply -f k8s/openbrain-tailscale-funnel.yaml     # Tailscale Funnel (public HTTPS)
+kubectl apply -f k8s/openbrain-funnel-ingress.yaml       # PUBLIC HTTPS via real Funnel
+# k8s/openbrain-tailscale-funnel.yaml is RETIRED - superseded by the Ingress above
 
 # Enable session affinity on the ClusterIP service (required for multi-replica SSE)
 kubectl patch svc openbrain-api -n openbrain \
   -p '{"spec":{"sessionAffinity":"ClientIP","sessionAffinityConfig":{"clientIP":{"timeoutSeconds":3600}}}}'
 ```
+
+> **`openbrain-tailscale-funnel.yaml` is retired** and no longer applied. It
+> never enabled Funnel, despite the name and the `tailscale.com/funnel: "true"`
+> annotation. The operator honours that annotation on an **Ingress** with
+> `ingressClassName: tailscale`, not on a LoadBalancer Service. On a Service it
+> creates a tailnet device and DNATs the port, with no `tailscale serve` config
+> — and Funnel requires one.
+>
+> Consequences worth knowing, because they mislead in both directions:
+>
+> - it was reachable from the **tailnet only**, never the public internet
+> - nothing terminated TLS, so it spoke plain HTTP on port 443:
+>   `http://<host>.<tailnet>.ts.net:443/` worked and `https://…` always failed.
+>   Any client building an `https://` URL against it could never have worked.
+> - the operator appends a suffix when a hostname is taken, so its device came up
+>   as `openbrain-1` rather than `openbrain`
+>
+> Verify the distinction with
+> `kubectl exec -n tailscale <proxy-pod> -c tailscale -- tailscale serve status`.
+> `No serve config` means no Funnel.
+>
+> **`openbrain-funnel-ingress.yaml` is the form that works.** The same command
+> reports `Funnel on`, TLS is terminated for you, and one hostname serves both
+> the tailnet and the public internet — which removes the need for clients to
+> switch endpoints depending on where they are.
+>
+> ⚠ It is a **public internet** endpoint. Since 0.8.0 the server refuses to boot
+> with no key configured (no rows in `access_keys` and no `MCP_ACCESS_KEY`), so
+> it cannot silently become an open memory store. Still confirm `/sse` returns
+> **401** without a key. `/health` is unauthenticated by design and returns only
+> a status string.
 
 ### Step 5: Wait and Verify
 

@@ -94,9 +94,9 @@
                 </a>
             </div>
             <div class="mt-8 inline-flex items-center gap-2 text-xs text-gray-500">
-                <span class="px-2 py-0.5 rounded-full bg-brand-600 text-white font-semibold">NEW &middot; v0.7.0</span>
-                <a href="docs.html#database" class="hover:text-brand-600 transition">
-                    Provenance helpers &mdash; source-hash lookups &amp; capability probe &rarr;
+                <span class="px-2 py-0.5 rounded-full bg-brand-600 text-white font-semibold">NEW &middot; v0.8.0</span>
+                <a href="docs.html#access-keys" class="hover:text-brand-600 transition">
+                    Named access keys &mdash; per-client revocation &amp; expiry &rarr;
                 </a>
             </div>
         </div>
@@ -162,7 +162,7 @@
                         <svg aria-hidden="true" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
                     </div>
                     <h3 class="font-semibold mb-2">Private & Self-Hosted</h3>
-                    <p class="text-sm text-gray-500 leading-relaxed">Run on your own hardware with Docker, K8s, or your homelab. Your memories never leave your infrastructure.</p>
+                    <p class="text-sm text-gray-500 leading-relaxed">Run on your own hardware with Docker, K8s, or your homelab. Your memories never leave your infrastructure. <span class="text-gray-600"><strong>v0.8.0+</strong>: <a href="docs.html#access-keys" class="text-brand-600 hover:underline">named access keys</a> &mdash; one per client, revocable on its own.</span></p>
                 </div>
                 <!-- Feature 5 -->
                 <div class="p-6 rounded-xl border border-gray-100 hover:border-brand-200 hover:shadow-sm transition">
@@ -566,7 +566,8 @@ Follow these steps exactly:
 
 5. Wait for http://localhost:8000/health and http://localhost:8080/health to return healthy.
 
-6. Configure my chosen AI client with the MCP server URL and key.
+6. Configure my chosen AI client against the MCP server URL, sending the key as the
+   x-brain-key header (the ?key= URL form is off unless MCP_ALLOW_KEY_IN_QUERY=true).
 
 7. Verify by calling the thought_stats MCP tool.
 

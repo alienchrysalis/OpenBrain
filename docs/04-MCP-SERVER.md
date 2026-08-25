@@ -17,7 +17,7 @@ Open Brain's MCP server exposes seven tools for reading, writing, updating, and 
 ```
 AI Client (Copilot, Claude, ChatGPT, etc.)
     ↓ HTTP POST (MCP protocol)
-    ↓ Auth: x-brain-key header or ?key= param
+    ↓ Auth: x-brain-key header (or ?key= when MCP_ALLOW_KEY_IN_QUERY=true)
     ↓
 Edge Function: open-brain-mcp
     ├─ Hono web framework (routing)

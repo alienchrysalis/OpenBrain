@@ -28,6 +28,10 @@ flowchart LR
     H --> I["Ranked Results"]
 ```
 
+> **There is a second table.** `access_keys` holds MCP credentials as hashes — see
+> [10. Auth Table: `access_keys`](#10-auth-table-access_keys). Nothing in the search
+> path touches it; it exists only so the server can authenticate a caller.
+
 ---
 
 ## Prerequisites
@@ -434,4 +438,50 @@ VACUUM ANALYZE thoughts;
 
 -- Check table size
 SELECT pg_size_pretty(pg_total_relation_size('thoughts'));
+```
+
+---
+
+## 10. Auth Table: `access_keys`
+
+Added by `db/migrations/004-add-access-keys.sql`. Holds the MCP access keys that
+replaced the single shared `MCP_ACCESS_KEY`.
+
+```sql
+CREATE TABLE IF NOT EXISTS access_keys (
+    id           UUID        DEFAULT gen_random_uuid() PRIMARY KEY,
+    label        TEXT        NOT NULL,
+    key_hash     TEXT        NOT NULL UNIQUE,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_used_at TIMESTAMPTZ,
+    revoked_at   TIMESTAMPTZ,
+    expires_at   TIMESTAMPTZ
+);
+```
+
+The columns carry policy, not just data:
+
+| Column | Why it exists |
+|---|---|
+| `key_hash` | SHA-256 hex, `UNIQUE` (which also indexes the lookup). **The key itself is never stored and cannot be recovered** — a database dump does not hand over live keys. |
+| `label` | Who or what the key is for: `toby-laptop`, `ci-rummag`, `legacy-shared`. |
+| `last_used_at` | Stamped on every successful auth, so an unused or forgotten key is visible. |
+| `revoked_at` | **Revoke by stamping this, never by deleting the row** — the row *is* the audit trail. |
+| `expires_at` | Optional. Fails safe for keys handed to a laptop or a contractor. |
+
+Plain SHA-256 is correct here rather than bcrypt or argon2: the key is 32 bytes from a
+CSPRNG, so there is no brute-force surface and no human-chosen password to protect.
+Hashing exists so a dump does not leak, not to slow down a guesser.
+
+`MCP_ACCESS_KEY` still authenticates as a fallback when no row matches, so existing
+deployments keep working. `npm run key -- seed-legacy` folds it into this table as
+`legacy-shared`.
+
+```sql
+-- Who is actually using this server, and when did they last connect?
+SELECT label,
+       CASE WHEN revoked_at IS NOT NULL THEN 'revoked' ELSE 'active' END AS state,
+       last_used_at
+FROM access_keys
+ORDER BY last_used_at DESC NULLS LAST;
 ```

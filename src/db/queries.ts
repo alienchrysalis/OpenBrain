@@ -437,3 +437,103 @@ export async function batchInsertThoughts(
 
   return results;
 }
+
+// ─── Access Keys ─────────────────────────────────────────────────────
+
+export interface AccessKeyRow {
+  id: string;
+  label: string;
+  created_at: Date;
+  last_used_at: Date | null;
+  revoked_at: Date | null;
+  expires_at: Date | null;
+}
+
+/** Postgres SQLSTATE for "relation does not exist". */
+const UNDEFINED_TABLE = "42P01";
+
+function isMissingAccessKeysTable(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: string }).code === UNDEFINED_TABLE
+  );
+}
+
+/** Columns safe to select — key_hash is deliberately never returned. */
+const ACCESS_KEY_COLUMNS = "id, label, created_at, last_used_at, revoked_at, expires_at";
+
+/**
+ * Look up a key by its hash. Returns null when migration 004 has not been applied
+ * yet, so a half-deployed upgrade degrades to the MCP_ACCESS_KEY fallback instead
+ * of 500-ing every handshake.
+ */
+export async function findAccessKeyByHash(
+  pool: pg.Pool,
+  keyHash: string
+): Promise<AccessKeyRow | null> {
+  try {
+    const { rows } = await pool.query<AccessKeyRow>(
+      `SELECT ${ACCESS_KEY_COLUMNS} FROM access_keys WHERE key_hash = $1`,
+      [keyHash]
+    );
+    return rows[0] ?? null;
+  } catch (error) {
+    if (isMissingAccessKeysTable(error)) return null;
+    throw error;
+  }
+}
+
+export async function touchAccessKey(pool: pg.Pool, id: string): Promise<void> {
+  await pool.query(`UPDATE access_keys SET last_used_at = now() WHERE id = $1`, [id]);
+}
+
+/** Count keys that could authenticate right now — used by the boot-time fail-closed check. */
+export async function countUsableAccessKeys(pool: pg.Pool): Promise<number> {
+  try {
+    const { rows } = await pool.query<{ count: string }>(
+      `SELECT COUNT(*) AS count FROM access_keys
+       WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())`
+    );
+    return parseInt(rows[0]?.count ?? "0", 10);
+  } catch (error) {
+    if (isMissingAccessKeysTable(error)) return 0;
+    throw error;
+  }
+}
+
+export async function insertAccessKey(
+  pool: pg.Pool,
+  label: string,
+  keyHash: string,
+  expiresAt?: Date
+): Promise<AccessKeyRow> {
+  const { rows } = await pool.query<AccessKeyRow>(
+    `INSERT INTO access_keys (label, key_hash, expires_at)
+     VALUES ($1, $2, $3)
+     RETURNING ${ACCESS_KEY_COLUMNS}`,
+    [label, keyHash, expiresAt ?? null]
+  );
+  return rows[0]!;
+}
+
+export async function listAccessKeys(pool: pg.Pool): Promise<AccessKeyRow[]> {
+  const { rows } = await pool.query<AccessKeyRow>(
+    `SELECT ${ACCESS_KEY_COLUMNS} FROM access_keys ORDER BY created_at ASC`
+  );
+  return rows;
+}
+
+/** Revoke by stamping revoked_at. Never deletes — the row is the audit trail. */
+export async function revokeAccessKey(
+  pool: pg.Pool,
+  id: string
+): Promise<AccessKeyRow | null> {
+  const { rows } = await pool.query<AccessKeyRow>(
+    `UPDATE access_keys SET revoked_at = COALESCE(revoked_at, now())
+     WHERE id = $1
+     RETURNING ${ACCESS_KEY_COLUMNS}`,
+    [id]
+  );
+  return rows[0] ?? null;
+}

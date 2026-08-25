@@ -581,6 +581,12 @@ The `created_by` parameter is fully optional — omit it and everything works ex
 
 ## Client Configuration
 
+> The examples below put the key in the URL. That form is **off by default** —
+> query strings land in access logs, proxy logs and browser history. Prefer the
+> `x-brain-key` header (Claude Code, Cursor, Windsurf and VS Code all support
+> `"headers"`). For clients that cannot send headers (ChatGPT, Claude Desktop
+> connectors), set `MCP_ALLOW_KEY_IN_QUERY=true` on the server.
+
 ### Claude Code
 
 Add to `~/.claude/settings.json`:
@@ -827,7 +833,8 @@ For clients with **no MCP support**, use the REST API on port 8000 — every MCP
 | `OLLAMA_EMBED_MODEL` | `nomic-embed-text` | Embedding model |
 | `OLLAMA_LLM_MODEL` | `llama3.2` | Metadata extraction model |
 | `OPENROUTER_API_KEY` | — | OpenRouter key (if using cloud embeddings) |
-| `MCP_ACCESS_KEY` | — | MCP authentication key (generate with `openssl rand -hex 32`) |
+| `MCP_ACCESS_KEY` | — | Shared bootstrap key (generate with `openssl rand -hex 32`). Prefer named keys — see [Access keys](#access-keys) |
+| `MCP_ALLOW_KEY_IN_QUERY` | `false` | Accept the key as `?key=` in the URL. Off by default — query strings are logged by proxies |
 | `API_PORT` | `8000` | REST API port |
 | `MCP_PORT` | `8080` | MCP SSE server port |
 | `LOG_LEVEL` | `info` | Logging level |
@@ -1012,10 +1019,45 @@ docker build -t openbrain-api .
 
 ## Security
 
-- **MCP Access Key** — All MCP endpoints require authentication via `?key=` parameter or `x-brain-key` header
+- **Named access keys** — Every client gets its own key, revocable on its own. See [Access keys](#access-keys)
+- **Fail closed** — The server refuses to start when no key is configured, rather than serving unauthenticated
+- **Header auth by default** — `x-brain-key`; the `?key=` URL form requires `MCP_ALLOW_KEY_IN_QUERY=true`
 - **No secrets in code** — All credentials via environment variables or K8s Secrets
 - **Row Level Security** — RLS enabled on the `thoughts` table
-- **Key rotation** — Generate new key with `openssl rand -hex 32`, update env and client configs
+
+### Access keys
+
+Keys live in the `access_keys` table as SHA-256 hashes — a database dump does not
+leak live keys, and a key can never be re-read once minted.
+
+```bash
+npm run key -- mint --label toby-laptop            # prints the key once
+npm run key -- mint --label ci-rummag --expires 2026-12-31
+npm run key -- list                                # labels, last use, state — no key material
+npm run key -- revoke --id <uuid>                  # stamps revoked_at, keeps the audit row
+```
+
+Give the key to the client as the `x-brain-key` header. Revoking one key leaves
+every other client working.
+
+**Where to run it.** The CLI needs a build (`dist/cli/accessKey.js`) *and* a database
+connection, so it runs wherever the server does — not on a laptop pointed at a remote
+deployment, which fails with a connection error rather than anything about keys. For
+Kubernetes:
+
+```bash
+POD=$(kubectl get pods -n openbrain -l app=openbrain-api -o jsonpath='{.items[0].metadata.name}')
+kubectl exec -n openbrain "$POD" -- npm run key -- mint --label toby-laptop
+```
+
+`MCP_ACCESS_KEY` still authenticates as a shared fallback so existing deployments
+keep working. To fold it into the table:
+
+```bash
+npm run key -- seed-legacy    # stores its hash as "legacy-shared"; the key is unchanged
+```
+
+Requires migration `db/migrations/004-add-access-keys.sql`.
 
 ### Generate a new MCP key
 

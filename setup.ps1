@@ -51,6 +51,48 @@ function Ask-Choice {
     return $result
 }
 
+# Merge a fragment into a JSON config instead of replacing it. Overwriting
+# silently discards every other MCP server and setting the user has, so this
+# backs up first and leaves the file alone when it cannot be parsed.
+function Merge-JsonConfig {
+    param([string]$Path, [hashtable]$Fragment, [string]$Label)
+
+    # No return value: hashtables are reference types, and returning one would
+    # emit the result of every recursive call into the pipeline, so the caller
+    # would serialise an array instead of the merged object.
+    function Merge-Hashtable {
+        param([hashtable]$Target, [hashtable]$Source)
+        foreach ($key in $Source.Keys) {
+            if ($Source[$key] -is [hashtable] -and $Target[$key] -is [hashtable]) {
+                Merge-Hashtable -Target $Target[$key] -Source $Source[$key]
+            } else {
+                $Target[$key] = $Source[$key]
+            }
+        }
+    }
+
+    if (-not (Test-Path $Path)) {
+        $Fragment | ConvertTo-Json -Depth 10 | Set-Content $Path -Encoding UTF8
+        Write-Ok "$Label created at $Path"
+        return
+    }
+
+    try {
+        $existing = Get-Content $Path -Raw | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+    } catch {
+        Write-Warn "$Label left untouched — $Path is not valid JSON."
+        Write-Host "  Add this to $Path by hand:" -ForegroundColor Gray
+        Write-Host ($Fragment | ConvertTo-Json -Depth 10) -ForegroundColor Gray
+        return
+    }
+
+    $backup = "$Path.openbrain-backup-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+    Copy-Item $Path $backup -Force
+    Merge-Hashtable -Target $existing -Source $Fragment
+    $existing | ConvertTo-Json -Depth 10 | Set-Content $Path -Encoding UTF8
+    Write-Ok "$Label updated at $Path (backup: $backup)"
+}
+
 # ── Banner ───────────────────────────────────────────────────────────
 
 Write-Host ""
@@ -249,6 +291,10 @@ AZURE_OPENAI_API_VERSION=2024-06-01
 # MCP Authentication
 MCP_ACCESS_KEY=$mcpKey
 
+# Accept the key as ?key= in the URL. Off by default — query strings are logged
+# by proxies. Only needed for clients that cannot send the x-brain-key header.
+MCP_ALLOW_KEY_IN_QUERY=false
+
 # Server Ports
 API_PORT=8000
 MCP_PORT=8080
@@ -317,7 +363,9 @@ Write-Host "    4) Skip             — I'll configure it manually" -ForegroundC
 Write-Host ""
 $clientChoice = Ask -Prompt "  Choice (1/2/3/4)" -Default "1"
 
-$mcpUrl = "http://localhost:8080/sse?key=$mcpKeyFromEnv"
+# Header auth, not ?key= — since 0.8.0 the URL form is refused unless
+# MCP_ALLOW_KEY_IN_QUERY=true, which the generated .env does not set.
+$mcpUrl = "http://localhost:8080/sse"
 
 switch ($clientChoice) {
     '1' {
@@ -326,25 +374,17 @@ switch ($clientChoice) {
         if (-not (Test-Path $vscodePath)) { New-Item -ItemType Directory -Path $vscodePath -Force | Out-Null }
         $settingsFile = Join-Path $vscodePath 'settings.json'
 
-        $mcpSettings = @{
+        Merge-JsonConfig -Path $settingsFile -Label "VS Code .vscode/settings.json" -Fragment @{
             "mcp" = @{
                 "servers" = @{
                     "openbrain" = @{
-                        "type" = "sse"
-                        "url"  = $mcpUrl
+                        "type"    = "sse"
+                        "url"     = $mcpUrl
+                        "headers" = @{ "x-brain-key" = $mcpKeyFromEnv }
                     }
                 }
             }
         }
-
-        if (Test-Path $settingsFile) {
-            $existing = Get-Content $settingsFile -Raw | ConvertFrom-Json -AsHashtable
-            $existing["mcp"] = $mcpSettings["mcp"]
-            $existing | ConvertTo-Json -Depth 10 | Set-Content $settingsFile -Encoding UTF8
-        } else {
-            $mcpSettings | ConvertTo-Json -Depth 10 | Set-Content $settingsFile -Encoding UTF8
-        }
-        Write-Ok "VS Code .vscode/settings.json updated with MCP config"
         Write-Host "  → Reload VS Code window to activate" -ForegroundColor Gray
     }
     '2' {
@@ -353,28 +393,14 @@ switch ($clientChoice) {
         if (-not (Test-Path $claudePath)) { New-Item -ItemType Directory -Path $claudePath -Force | Out-Null }
         $configFile = Join-Path $claudePath 'claude_desktop_config.json'
 
-        $claudeConfig = @{
+        Merge-JsonConfig -Path $configFile -Label "Claude Desktop config" -Fragment @{
             "mcpServers" = @{
                 "openbrain" = @{
                     "command" = "npx"
-                    "args" = @("-y", "mcp-remote", $mcpUrl)
+                    "args" = @("-y", "mcp-remote", $mcpUrl, "--header", "x-brain-key:$mcpKeyFromEnv")
                 }
             }
         }
-
-        if (Test-Path $configFile) {
-            try {
-                $existing = Get-Content $configFile -Raw | ConvertFrom-Json -AsHashtable
-                if (-not $existing["mcpServers"]) { $existing["mcpServers"] = @{} }
-                $existing["mcpServers"]["openbrain"] = $claudeConfig["mcpServers"]["openbrain"]
-                $existing | ConvertTo-Json -Depth 10 | Set-Content $configFile -Encoding UTF8
-            } catch {
-                $claudeConfig | ConvertTo-Json -Depth 10 | Set-Content $configFile -Encoding UTF8
-            }
-        } else {
-            $claudeConfig | ConvertTo-Json -Depth 10 | Set-Content $configFile -Encoding UTF8
-        }
-        Write-Ok "Claude Desktop config updated"
         Write-Host "  → Fully quit Claude Desktop (system tray → Quit) and relaunch" -ForegroundColor Gray
     }
     '3' {
@@ -383,28 +409,15 @@ switch ($clientChoice) {
         if (-not (Test-Path $claudeDir)) { New-Item -ItemType Directory -Path $claudeDir -Force | Out-Null }
         $settingsFile = Join-Path $claudeDir 'settings.json'
 
-        $claudeCodeConfig = @{
+        Merge-JsonConfig -Path $settingsFile -Label "Claude Code settings" -Fragment @{
             "mcpServers" = @{
                 "openbrain" = @{
-                    "type" = "sse"
-                    "url"  = $mcpUrl
+                    "type"    = "sse"
+                    "url"     = $mcpUrl
+                    "headers" = @{ "x-brain-key" = $mcpKeyFromEnv }
                 }
             }
         }
-
-        if (Test-Path $settingsFile) {
-            try {
-                $existing = Get-Content $settingsFile -Raw | ConvertFrom-Json -AsHashtable
-                if (-not $existing["mcpServers"]) { $existing["mcpServers"] = @{} }
-                $existing["mcpServers"]["openbrain"] = $claudeCodeConfig["mcpServers"]["openbrain"]
-                $existing | ConvertTo-Json -Depth 10 | Set-Content $settingsFile -Encoding UTF8
-            } catch {
-                $claudeCodeConfig | ConvertTo-Json -Depth 10 | Set-Content $settingsFile -Encoding UTF8
-            }
-        } else {
-            $claudeCodeConfig | ConvertTo-Json -Depth 10 | Set-Content $settingsFile -Encoding UTF8
-        }
-        Write-Ok "Claude Code settings updated"
         Write-Host "  → Restart Claude Code to activate" -ForegroundColor Gray
     }
     default {

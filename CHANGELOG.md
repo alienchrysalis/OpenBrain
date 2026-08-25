@@ -4,6 +4,104 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.4] - 2026-08-20
+
+### Changed
+- `/health` is no longer request-logged, matching the existing treatment of `/metrics`.
+  Measured on a live pod: **75% of log lines were health checks** — roughly 5,000 a day
+  per replica — burying the access-key audit records added in 0.8.1 and 0.8.3. An audit
+  trail nobody can find in the noise is not an audit trail.
+- `createApi()` takes an optional `log` function. Without it the quiet-path behaviour
+  cannot be tested at all: vitest replaces console and stdout, and hono binds
+  `console.log` when `logger()` is constructed, so both a console spy and a stdout spy
+  observe nothing and the assertion passes vacuously whatever the code does.
+
+## [0.8.3] - 2026-08-20
+
+### Added
+- `/sse` connect and denial logs carry `addr=<client address>`, so a leaked key can be
+  traced to where it was used rather than only to when (#18). Measured first: the real
+  client IP does survive Cloudflare → Tailscale Funnel → pod, arriving as
+  `cf-connecting-ip`, while `req.socket.remoteAddress` is only the in-cluster proxy.
+  Only `cf-connecting-ip` is trusted — Cloudflare *appends* to `x-forwarded-for`, so
+  reading that would let a caller write an arbitrary address into the audit log.
+- `MCP_LOG_HEADERS` (default off) dumps the header names present on a `/sse` handshake
+  plus the values of address-carrying headers only. `x-brain-key` arrives on that same
+  request, so a diagnostic printing every value would write live keys into the log it
+  exists to secure.
+
+## [0.8.2] - 2026-08-20
+
+### Fixed
+- **`setup.sh` no longer destroys existing AI client configuration** (#13). All three
+  branches wrote their config with `cat > "$FILE"`, unconditionally replacing the file,
+  so any other MCP servers, permissions or editor settings were silently lost with no
+  warning and no backup. The reported case was `~/.claude/settings.json`, but
+  `.vscode/settings.json` and `claude_desktop_config.json` had the identical defect.
+  Configs are now merged (via `jq`, falling back to `node`), the original is backed up
+  to `<file>.openbrain-backup-<timestamp>`, and when neither tool is available — or the
+  file is not valid JSON — the file is left untouched and the snippet is printed for
+  manual merge.
+- `setup.ps1` merged `mcpServers` correctly but replaced the whole `mcp` key for VS
+  Code, dropping any other servers configured under `mcp.servers`, and overwrote the
+  file outright when it failed to parse. It now uses the same merge-and-back-up path.
+- **The wizards generated client configs that could not connect.** Both wrote
+  `http://localhost:8080/sse?key=<KEY>`, but 0.8.0 made `MCP_ALLOW_KEY_IN_QUERY`
+  default to false and the generated `.env` never set it, so a fresh install produced a
+  client that got 401. They now configure the `x-brain-key` header (and
+  `mcp-remote --header` for Claude Desktop), and the generated `.env` documents the flag.
+
+## [0.8.1] - 2026-08-20
+
+### Added
+- `openbrain_mcp_handshakes_total{source,outcome}` on `/metrics` — counts `/sse`
+  handshakes by whether the key arrived as the `x-brain-key` header, as `?key=`, or
+  not at all. Turning `MCP_ALLOW_KEY_IN_QUERY` off is a breaking change for anyone
+  still using the URL form, and until now there was no way to tell whether anyone was:
+  the MCP listener logged nothing per request.
+- `/sse` connect and denial logs now carry `via=<source>` and a sanitised
+  `client=<user-agent>`, so a query-param user can be identified and reconfigured
+  rather than just counted.
+
+### Fixed
+- CI publishes images again. The `docker` job had failed on **every** push to master
+  since 2026-03-25 with `invalid tag "ghcr.io/srnichols/OpenBrain:latest": repository
+  name must be lowercase`; `build-and-test` passed throughout, which is why it went
+  unnoticed. The image name is now lowercased, and it publishes to
+  `ghcr.io/srnichols/openbrain/api` — a package created by this workflow, so
+  `GITHUB_TOKEN` can write it and it inherits the repo's public visibility. The bare
+  `ghcr.io/srnichols/openbrain` package predates the workflow, is not linked to the
+  repo, and rejected the push with `permission_denied: write_package`.
+- `deploy/on-prem/k8s/openbrain-api-deployment.yaml` now points at that GHCR image, so
+  the manifest applies as-is without a private registry.
+
+## [0.8.0] - 2026-08-19
+
+### Added
+- Named access keys (migration `004-add-access-keys.sql`): `access_keys` table storing
+  a SHA-256 hash per key with `label`, `last_used_at`, `revoked_at` and `expires_at`.
+  Each client gets its own key, revocable without rotating everyone else's.
+- `npm run key` CLI — `mint`, `seed-legacy`, `list`, `revoke`. A minted key is printed
+  once and only its hash is stored, so it can never be re-read.
+- Per-key session attribution: `/sse` resolves the key to its row id and carries it on
+  the session record, and connects are logged with the key label.
+- `MCP_ALLOW_KEY_IN_QUERY` (default `false`) to opt into the `?key=` URL form.
+
+### Fixed
+- **Auth no longer fails open.** `if (mcpAccessKey && key !== mcpAccessKey)` allowed
+  *every* request when `MCP_ACCESS_KEY` was unset, silently turning a public endpoint
+  into an open read/write memory store. The server now refuses to start when neither a
+  usable `access_keys` row nor `MCP_ACCESS_KEY` is configured.
+
+### Changed
+- **Breaking:** the key is no longer accepted as `?key=` in the URL unless
+  `MCP_ALLOW_KEY_IN_QUERY=true`. Query strings land in access logs, proxy logs and
+  browser history. Clients that can send `x-brain-key` should; ChatGPT and Claude
+  Desktop connectors need the flag.
+- `MCP_ACCESS_KEY` still authenticates as a fallback when no `access_keys` row matches,
+  so existing deployments upgrade without a key swap. Run `npm run key -- seed-legacy`
+  to fold it into the table.
+
 ## [0.7.4] - 2026-05-18
 
 ### Added

@@ -30,7 +30,11 @@ spec:
     spec:
       containers:
       - name: openbrain-api
-        image: your-registry.azurecr.io/openbrain/api:latest
+        # Published by CI on every push to master (.github/workflows/ci.yml) and
+        # public, so no pull secret is needed for it. Tagged with the commit SHA
+        # rather than :latest, so a pod's image says exactly which build it is and
+        # a rollback is `kubectl rollout undo`.
+        image: ghcr.io/srnichols/openbrain/api:3a52f1bee854b40c3e8890125125800191e19d31
         imagePullPolicy: Always
         ports:
         - name: api
@@ -70,11 +74,19 @@ spec:
           value: "ollama"
 
         # MCP Authentication
+        # Shared fallback key. Per-client keys live in the access_keys table —
+        # mint them with `npm run key -- mint --label <name>`.
         - name: MCP_ACCESS_KEY
           valueFrom:
             secretKeyRef:
               name: openbrain-secrets
               key: mcp-access-key
+        # Only for clients that cannot send the x-brain-key header — the URL form
+        # puts the key into every access and proxy log. True here for backward
+        # compatibility with clients configured before 0.8.0; turning it off is a
+        # separate change, once request logging shows nobody depends on it.
+        - name: MCP_ALLOW_KEY_IN_QUERY
+          value: "true"
 
         # Application
         - name: API_HOST
@@ -87,6 +99,10 @@ spec:
           value: "8080"
         - name: LOG_LEVEL
           value: "info"
+        # Set live but previously missing here, which meant this file could not
+        # reproduce the running deployment.
+        - name: OPENBRAIN_STRICT_INGEST
+          value: "true"
 
         # Optional: OpenRouter (if EMBEDDER_PROVIDER=openrouter)
         # - name: OPENROUTER_API_KEY
@@ -143,6 +159,9 @@ spec:
                   - openbrain-api
               topologyKey: kubernetes.io/hostname
 
+      # Not needed by the GHCR image above, which is public. Kept because the
+      # previous ReplicaSet still references a private ACR tag, and removing this
+      # would leave `kubectl rollout undo` unable to pull.
       imagePullSecrets:
       - name: acr-pull-secret
       terminationGracePeriodSeconds: 30

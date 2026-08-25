@@ -334,24 +334,6 @@ export class CaptureValidationError extends Error {
   }
 }
 
-function optionalString(
-  body: Record<string, unknown>,
-  key: string,
-  warnings: CaptureWarning[],
-): string | undefined {
-  const v = body[key];
-  if (v === undefined) return undefined;
-  if (typeof v !== "string" || v.trim().length === 0) {
-    warnings.push({
-      field: key,
-      reason: "wrong_type",
-      message: `'${key}' was ignored because it must be a non-empty string.`,
-    });
-    return undefined;
-  }
-  return v;
-}
-
 /**
  * Stricter form: throws CaptureValidationError (= HTTP 400) if the field is
  * present but not a non-empty string. Use for known fields where a malformed
